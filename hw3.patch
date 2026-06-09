@@ -1,0 +1,147 @@
+diff --git a/.env.production.e2e.example b/.env.production.e2e.example
+new file mode 100644
+index 0000000..e3d8a3a
+--- /dev/null
++++ b/.env.production.e2e.example
+@@ -0,0 +1,9 @@
++# Конфиг для прогона e2e против развернутого инстанса на твоём VPS.
++#
++# Шаги:
++#   1) Скопируй этот файл: cp .env.production.e2e.example .env.production.e2e
++#   2) Подставь свой реальный домен в E2E_BASE_URL и E2E_API_URL
++#   3) make e2e-deployed
++
++E2E_BASE_URL=https://your-domain.example
++E2E_API_URL=https://your-domain.example/api
+diff --git a/Makefile b/Makefile
+index c200181..df40713 100644
+--- a/Makefile
++++ b/Makefile
+@@ -71,5 +71,8 @@ ps: ## Показать статус контейнеров
+ e2e-install: ## Один раз: ставит npm-зависимости фронта и качает Chromium для Playwright
+ 	cd front && npm install && npx playwright install --with-deps chromium
+ 
+-e2e: ## Прогнать Playwright-тесты против поднятого стека
++e2e: ## Прогнать Playwright-тесты против локального стека (через docker compose)
+ 	set -a && . ./.env.development.e2e && cd front && npm run e2e
++
++e2e-deployed: ## Прогнать Playwright-тесты против развернутого инстанса на VPS (нужен .env.production.e2e)
++	set -a && . ./.env.production.e2e && cd front && npm run e2e
+diff --git a/back/src/app.module.ts b/back/src/app.module.ts
+index f610996..81b1380 100644
+--- a/back/src/app.module.ts
++++ b/back/src/app.module.ts
+@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
+ import { TypeOrmModule } from '@nestjs/typeorm';
+ import { TodosModule } from './todos/todos.module';
+ import { Todo } from './todos/todo.entity';
++import { TestResetModule } from './test-reset/test-reset.module';
+ 
+ @Module({
+   imports: [
+@@ -21,6 +22,7 @@ import { Todo } from './todos/todo.entity';
+       }),
+     }),
+     TodosModule,
++    TestResetModule,
+   ],
+ })
+ export class AppModule {}
+diff --git a/back/src/test-reset/test-reset.controller.ts b/back/src/test-reset/test-reset.controller.ts
+new file mode 100644
+index 0000000..b3d3bd0
+--- /dev/null
++++ b/back/src/test-reset/test-reset.controller.ts
+@@ -0,0 +1,36 @@
++import {
++  Controller,
++  ForbiddenException,
++  Headers,
++  HttpCode,
++  HttpStatus,
++  Post,
++} from '@nestjs/common';
++import { InjectRepository } from '@nestjs/typeorm';
++import { ApiExcludeController } from '@nestjs/swagger';
++import { Repository } from 'typeorm';
++import { Todo } from '../todos/todo.entity';
++
++// Курсовой shared-токен: знают тесты студента, AI-агент-проверяющий и бекенд.
++// Менять не нужно — он одинаковый на весь поток. То же значение прошито в
++// front/e2e/helpers.ts.
++const E2E_RESET_TOKEN = 'e2e-reset-course-DevOps-2026';
++
++@ApiExcludeController()
++@Controller('test')
++export class TestResetController {
++  constructor(
++    @InjectRepository(Todo) private readonly todos: Repository<Todo>,
++  ) {}
++
++  @Post('reset')
++  @HttpCode(HttpStatus.NO_CONTENT)
++  async reset(
++    @Headers('x-e2e-reset-token') token: string | undefined,
++  ): Promise<void> {
++    if (token !== E2E_RESET_TOKEN) {
++      throw new ForbiddenException();
++    }
++    await this.todos.clear();
++  }
++}
+diff --git a/back/src/test-reset/test-reset.module.ts b/back/src/test-reset/test-reset.module.ts
+new file mode 100644
+index 0000000..fcc6305
+--- /dev/null
++++ b/back/src/test-reset/test-reset.module.ts
+@@ -0,0 +1,10 @@
++import { Module } from '@nestjs/common';
++import { TypeOrmModule } from '@nestjs/typeorm';
++import { Todo } from '../todos/todo.entity';
++import { TestResetController } from './test-reset.controller';
++
++@Module({
++  imports: [TypeOrmModule.forFeature([Todo])],
++  controllers: [TestResetController],
++})
++export class TestResetModule {}
+diff --git a/front/e2e/helpers.ts b/front/e2e/helpers.ts
+index baa0476..b5b97b0 100644
+--- a/front/e2e/helpers.ts
++++ b/front/e2e/helpers.ts
+@@ -2,19 +2,20 @@ import { request, type APIRequestContext } from '@playwright/test';
+ 
+ const API = process.env.E2E_API_URL ?? 'http://localhost:3000';
+ 
++// Курсовой shared-токен. То же значение прошито в back/src/test-reset/test-reset.controller.ts.
++const E2E_RESET_TOKEN = 'e2e-reset-course-DevOps-2026';
++
+ /**
+- * Wipe all todos via the API so each test starts from a clean state.
+- * Single-user app — no auth needed.
++ * Wipe all todos via the protected reset endpoint so each test starts
++ * from a clean state. Works against any environment (local or deployed).
+  */
+ export async function resetTodos(api?: APIRequestContext) {
+   const ctx = api ?? (await request.newContext({ baseURL: API }));
+-  const res = await ctx.get('/todos');
++  const res = await ctx.post('/test/reset', {
++    headers: { 'x-e2e-reset-token': E2E_RESET_TOKEN },
++  });
+   if (!res.ok()) {
+-    throw new Error(`Failed to list todos: ${res.status()}`);
+-  }
+-  const todos: Array<{ id: string }> = await res.json();
+-  for (const t of todos) {
+-    await ctx.delete(`/todos/${t.id}`);
++    throw new Error(`Reset failed: ${res.status()} ${res.statusText()}`);
+   }
+   if (!api) await ctx.dispose();
+ }
+diff --git a/teacher_authorized_key.pub b/teacher_authorized_key.pub
+new file mode 100644
+index 0000000..d157469
+--- /dev/null
++++ b/teacher_authorized_key.pub
+@@ -0,0 +1 @@
++ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBbOstgqNJz/otHu+0n2SL5dx/teXm1FYKIEWmSSRkb devops-course-grader-2026
