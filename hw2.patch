@@ -191,10 +191,10 @@ index 24c5d27..f19303b 100644
        description: dto.description ?? null,
 diff --git a/docker-compose.yml b/docker-compose.yml
 new file mode 100644
-index 0000000..88f6f71
+index 0000000..3d2ce7c
 --- /dev/null
 +++ b/docker-compose.yml
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,54 @@
 +# Docker Compose файл для hw2.
 +#
 +# Имя образа для back/front собирается из переменных DOCKERHUB_USERNAME и IMAGE_TAG —
@@ -224,6 +224,9 @@ index 0000000..88f6f71
 +    # TODO — backend (NestJS):
 +    #   - указать образ, который ты публикуешь в свой Docker Hub репозиторий
 +    #     (используй переменные DOCKERHUB_USERNAME и IMAGE_TAG)
++    #   - указать платформу образа linux/amd64 (см. раздел «Платформа» в задании —
++    #     на Apple Silicon без этого compose pull запросит arm64-манифест и упадёт,
++    #     потому что мы публикуем single-arch amd64-образы)
 +    #   - подать переменные окружения из соответствующего env-файла
 +    #     (не забудь: в нём DB_HOST теперь смотрит на service-name из compose-сети)
 +    #   - пробросить порт API на 13000
@@ -236,6 +239,7 @@ index 0000000..88f6f71
 +  front:
 +    # TODO — frontend (nginx со статикой):
 +    #   - указать образ из своего Docker Hub репозитория
++    #   - указать платформу образа linux/amd64 (по той же причине, что у back)
 +    #   - пробросить 80-й порт nginx наружу на 18080
 +    #   - выразить зависимость от back, но НЕ через service_healthy:
 +    #     у back в этом задании нет healthcheck, поэтому здесь нужна другая condition
