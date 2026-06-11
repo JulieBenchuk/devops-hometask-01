@@ -106,7 +106,7 @@ index 0000000..fcc6305
 +})
 +export class TestResetModule {}
 diff --git a/front/e2e/helpers.ts b/front/e2e/helpers.ts
-index baa0476..b5b97b0 100644
+index baa0476..4be4b51 100644
 --- a/front/e2e/helpers.ts
 +++ b/front/e2e/helpers.ts
 @@ -2,19 +2,20 @@ import { request, type APIRequestContext } from '@playwright/test';
@@ -123,9 +123,10 @@ index baa0476..b5b97b0 100644
 + * from a clean state. Works against any environment (local or deployed).
   */
  export async function resetTodos(api?: APIRequestContext) {
-   const ctx = api ?? (await request.newContext({ baseURL: API }));
+-  const ctx = api ?? (await request.newContext({ baseURL: API }));
 -  const res = await ctx.get('/todos');
-+  const res = await ctx.post('/test/reset', {
++  const ctx = api ?? (await request.newContext());
++  const res = await ctx.post(`${API}/test/reset`, {
 +    headers: { 'x-e2e-reset-token': E2E_RESET_TOKEN },
 +  });
    if (!res.ok()) {
@@ -138,6 +139,17 @@ index baa0476..b5b97b0 100644
    }
    if (!api) await ctx.dispose();
  }
+@@ -23,8 +24,8 @@ export async function createTodoViaApi(
+   title: string,
+   description?: string,
+ ): Promise<{ id: string; title: string; description: string | null }> {
+-  const ctx = await request.newContext({ baseURL: API });
+-  const res = await ctx.post('/todos', {
++  const ctx = await request.newContext();
++  const res = await ctx.post(`${API}/todos`, {
+     data: { title, ...(description ? { description } : {}) },
+   });
+   if (!res.ok()) {
 diff --git a/teacher_authorized_key.pub b/teacher_authorized_key.pub
 new file mode 100644
 index 0000000..d157469
