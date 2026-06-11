@@ -4,8 +4,8 @@ build-back: ## Build the back docker image
 build-front: ## Build the front docker image (needs .env.development.front)
 	. ./.env.development.front && docker build --build-arg "VITE_API_URL=$$VITE_API_URL" -t todo-front front
 
-network: ## Create the user-defined network
-	docker network create todo-net
+network: ## Create the user-defined network (idempotent)
+	docker network inspect todo-net >/dev/null 2>&1 || docker network create todo-net
 
 network-rm: ## Remove the user-defined network
 	docker network rm todo-net
@@ -28,8 +28,12 @@ down-back: ## Stop and remove the back container
 down-front: ## Stop and remove the front container
 	docker rm -f todo-front-container
 
-e2e-install: ## Install front npm deps and the playwright browser (run once)
-	cd front && npm install && npx playwright install --with-deps chromium
+up: build-back build-front network up-db up-back up-front ## Build images, create network and start all three containers
 
-e2e: ## Open the Playwright UI runner against the running containers (needs all three containers up + e2e-install)
+down: down-front down-back down-db network-rm ## Stop and remove all containers and the network
+
+e2e-install: ## Install front npm deps and the playwright browser (run once)
+	cd front && npm install && npx playwright install chromium
+
+e2e: ## Run Playwright e2e tests (headless)
 	set -a && . ./.env.development.e2e && cd front && npm run e2e
