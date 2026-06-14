@@ -1,6 +1,9 @@
 import { request, type APIRequestContext } from '@playwright/test';
 
-const API = process.env.E2E_API_URL ?? 'http://localhost:3000';
+const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
+  /\/$/,
+  '',
+);
 
 // Курсовой shared-токен. То же значение прошито в back/src/test-reset/test-reset.controller.ts.
 const E2E_RESET_TOKEN = 'e2e-reset-course-DevOps-2026';

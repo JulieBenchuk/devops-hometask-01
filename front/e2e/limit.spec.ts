@@ -1,7 +1,10 @@
 import { expect, test, request } from '@playwright/test';
 import { resetTodos } from './helpers';
 
-const API = process.env.E2E_API_URL ?? 'http://localhost:3000';
+const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
+  /\/$/,
+  '',
+);
 
 test.beforeEach(async () => {
   await resetTodos();
