@@ -1,0 +1,1299 @@
+diff --git a/.env.development.compose b/.env.development.compose
+new file mode 100644
+index 0000000..8ca06c9
+--- /dev/null
++++ b/.env.development.compose
+@@ -0,0 +1,2 @@
++DOCKERHUB_USERNAME=
++IMAGE_TAG=1.0.0
+diff --git a/.env.production.e2e.example b/.env.production.e2e.example
+new file mode 100644
+index 0000000..e3d8a3a
+--- /dev/null
++++ b/.env.production.e2e.example
+@@ -0,0 +1,9 @@
++# Конфиг для прогона e2e против развернутого инстанса на твоём VPS.
++#
++# Шаги:
++#   1) Скопируй этот файл: cp .env.production.e2e.example .env.production.e2e
++#   2) Подставь свой реальный домен в E2E_BASE_URL и E2E_API_URL
++#   3) make e2e-deployed
++
++E2E_BASE_URL=https://your-domain.example
++E2E_API_URL=https://your-domain.example/api
+diff --git a/INCIDENTS.md b/INCIDENTS.md
+deleted file mode 100644
+index 4e9a271..0000000
+--- a/INCIDENTS.md
++++ /dev/null
+@@ -1,68 +0,0 @@
+-# Incidents log — devops-hometask-01
+-
+-Журнал багов в доставке домашек и в самих патчах. Цель — не наступать дважды на одни и те же грабли. Каждый инцидент — короткий пост-мортем с симптомом, корнем, фиксом и системным выводом.
+-
+-Формат записи:
+-
+-```
+-## YYYY-MM-DD — короткое имя инцидента
+-
+-**Симптом:** что увидел студент / AI-агент / e2e-чек.
+-**Корень:** что на самом деле было сломано в репо/процессе.
+-**Архив:** ссылка на tag / commit SHA до фикса (если был force-push).
+-**Фикс:** что сделали.
+-**Системный вывод:** что добавить в процесс/CI, чтобы не повторилось. Если ещё не добавили — TODO здесь.
+-```
+-
+-Записи — в обратном хронологическом порядке (свежие сверху).
+-
+----
+-
+-## 2026-06-30 — hw3.patch на origin был stale, падал у студентов на week2 → week3
+-
+-**Симптом.** Студент по канону делает `git checkout -b week3 week2`, качает `hw3.patch` из `hw3-handoff` и получает:
+-
+-```
+-error: .env.development.compose: already exists in index
+-error: patch failed: Makefile:1
+-error: Makefile: patch does not apply
+-error: app-config/app.json: already exists in index
+-error: patch failed: back/src/todos/todos.service.ts:1
+-error: docker-compose.yml: already exists in index
+-error: patch failed: front/e2e/helpers.ts:5
+-error: front/e2e/limit.spec.ts: already exists in index
+-```
+-
+-Все падающие файлы — это файлы, добавленные/изменённые в hw2.
+-
+-**Корень.** На `origin/hw3-handoff` лежал старый патч, сгенерированный как `diff(hw-starter, _internal/hw-3-source)` — 424 строки, 12 файлов, включая всю hw2-дельту. По `MAINTAINERS.md` для N≥3 патч обязан быть `diff(hw-{N-1}-source, hw-N-source)` — минимальная дельта только за hwN.
+-
+-Локально мейнтейнер уже регенерировал правильный патч (коммит `d117452 hw3 handoff: patch from homework-02 to homework-03` — 147 строк, 7 файлов), но **в origin не запушил**. Студенты тянули старую версию.
+-
+-История регенераций на origin до фикса (5 коммитов, все — попытки исправить, но базой везде был `hw-starter`, а не `_internal/hw-2-source`):
+-
+-```
+-9166c69 regen hw3.patch against fixed hw-starter + trailing-slash hardening
+-1e2c07c regen hw3.patch: fix helpers.ts to use absolute URL
+-72ed76f fix: regenerate hw3.patch with correct hw-2-source baseline  ← заголовок врёт, по содержимому всё ещё diff vs hw-starter
+-4a8d413 regen hw3.patch: inherit platform: linux/amd64 TODO hint from hw-2-source
+-798af5e regen hw3.patch against current hw-starter (post-a195302)
+-```
+-
+-**Архив.** `archive/hw3-handoff-pre-fix-2026-06-30` → `9166c69` (запушен на origin). Полная история старых регенераций hw3.patch достижима через этот тег.
+-
+-**Фикс.** `git push --force-with-lease origin hw3-handoff:hw3-handoff` — origin/hw3-handoff переехал с `9166c69` на `d117452` (правильный delta-патч hw2→hw3).
+-
+-**Системный вывод.**
+-
+-1. Smoke-тест из `MAINTAINERS.md` («Smoke-тест после регенерации») формально есть, но не enforced — мейнтейнер может забыть прогнать или забыть запушить результат. Нужен **GitHub Actions workflow на `hw*-handoff`**, который:
+-   - триггерится на push в `hw*-handoff`,
+-   - собирает имитацию студенческого `week{N-1}` (последовательно накатывает `hw2.patch`..`hw{N-1}.patch` на `hw-starter`),
+-   - проверяет `git apply --check hwN.patch` и совпадение результата с `_internal/hw-N-source`,
+-   - падает → push физически не доезжает до студентов (требует ветку под branch protection с обязательной CI-проверкой).
+-
+-   Это убирает классы: «забыл прогнать smoke», «забыл запушить локальный фикс», «база патча не та». **TODO — не сделано.**
+-
+-2. Коммит-сообщения регенераций должны отражать реальную базу: «regen hw3.patch as diff(_internal/hw-2-source, _internal/hw-3-source)» вместо размытого «regen against fixed hw-starter». Чтобы по `git log hw3-handoff` сразу видеть, какая база зашита в данный коммит.
+-
+-3. Раз в семестр перед стартом потока — прогон полного студенческого флоу для каждой ДЗ (от форка `hw-starter` до `git apply hwN.patch` для всех N последовательно) в чистом окружении. Сейчас делается ad-hoc.
+diff --git a/MAINTAINERS.md b/MAINTAINERS.md
+index 9c692c4..ba26424 100644
+--- a/MAINTAINERS.md
++++ b/MAINTAINERS.md
+@@ -4,105 +4,67 @@
+ 
+ | Ветка | Назначение |
+ |---|---|
+-| `hw-starter` | То, с чего студент делает Fork. «Чистая» точка отсчёта. |
+-| `_internal/hw-N-source` | Кумулятивное состояние дерева **после** применения всех патчей `hw1.patch ... hwN.patch`. То есть `_internal/hw-N-source` строится поверх `_internal/hw-{N-1}-source`, добавляя только дельту hwN. Источник истины для регенерации патча. |
++| `hw-starter` | То, с чего студент делает Fork. «Чистая» точка отсчёта для всех ДЗ. |
++| `_internal/hw-N-source` | Целевое состояние дерева **после** применения `hwN.patch`. Источник истины для регенерации патча. |
+ | `hwN-handoff` | Одна-единственная ветка с файлом `hwN.patch` в корне. Студенты качают его `curl`-ом. |
+ | `main` | Историческая, нечасто обновляется. |
+ 
+ В fork-репо студента:
+ - `hw-starter` — нетронут, в синке с upstream.
+-- `weekN` — реализация ДЗ-N. Каждая следующая ответвлена от предыдущей (`git checkout -b weekN week{N-1}`) + накат `hwN.patch`.
+-
+-## Топология
+-
+-```
+-hw-starter ──► _internal/hw-2-source ──► _internal/hw-3-source ──► _internal/hw-4-source ──► ...
+-                       │                          │                          │
+-                       └─► hw2.patch              └─► hw3.patch              └─► hw4.patch
+-                       (diff vs hw-starter)       (diff vs hw-2-source)      (diff vs hw-3-source)
+-```
+-
+-**Важно:** для `N=2` патч — это `diff(hw-starter, hw-2-source)`. Для `N≥3` — `diff(hw-{N-1}-source, hw-N-source)`. Это даёт минимальный патч, содержащий только дельту hwN, который наложится на студенческий `week{N-1}` без конфликтов.
++- `weekN` — реализация ДЗ-N. Каждая следующая ответвлена от предыдущей + накат `hwN.patch`.
+ 
+ ## Золотое правило
+ 
+-**Любая правка `hw-starter`** или любого `_internal/hw-N-source` потенциально ломает hwN+1.patch (и далее). Если изменённый файл также модифицируется патчем — `git apply hwN.patch` упадёт с `patch does not apply` на студенческой машине.
++**Любая правка `hw-starter` потенциально ломает все `hwN.patch`.** Если изменённый в `hw-starter` файл также модифицируется патчем — `git apply hw2.patch` упадёт с `patch does not apply` на студенческой машине.
+ 
+-После каждого нетривиального изменения базовой ветки нужно **регенерировать** `_internal/hw-M-source` и `hwM-handoff` для всех M > N (где N — затронутая база).
++После каждого нетривиального изменения `hw-starter` нужно **регенерировать** `_internal/hw-N-source` и `hwN-handoff` для каждого N.
+ 
+ ## Процедура регенерации (для одного N)
+ 
+ ```bash
+-# Выбор базы для патча: hw-starter для N=2, hw-{N-1}-source для N>=3.
+-BASE_BRANCH="origin/_internal/hw-$((N-1))-source"   # или origin/hw-starter, если N=2
+-
+-# 1. (если базовая ветка съехала) rebase эталонного состояния hwN поверх неё
++# 1. rebase «применённого» состояния поверх нового hw-starter
+ git fetch origin
+ git checkout -b regen-hwN-source origin/_internal/hw-N-source
+-git rebase $BASE_BRANCH
+-#  → разрешить конфликты:
++git rebase origin/hw-starter
++#  → разрешить конфликты (обычно Makefile или общие файлы):
+ #    для файлов, которые патч ЗАМЕНЯЕТ целиком (Makefile), берём theirs;
+ #    для файлов, которые патч НЕ трогает, конфликта быть не должно — они
+-#    автоматически берут версию из base.
++#    автоматически берут версию hw-starter.
+ #  → прогнать ДЗ-N end-to-end, чтобы убедиться, что resolved-дерево рабочее
+ git push --force-with-lease origin regen-hwN-source:_internal/hw-N-source
+ 
+-# 2. сгенерировать свежий патч (минимальная дельта от предыдущей базы)
+-git diff $BASE_BRANCH regen-hwN-source > /tmp/hwN.patch
++# 2. сгенерировать свежий патч и положить на handoff-ветку
++git diff origin/hw-starter regen-hwN-source > /tmp/hwN.patch
+ 
+-# sanity-проверка: патч чисто применяется на свежую базу,
+-# результат бит-в-бит совпадает с regen-hwN-source
+-git checkout -b sanity-check $BASE_BRANCH
+-git apply --check /tmp/hwN.patch && echo "OK: applies cleanly"
+-git apply --index /tmp/hwN.patch
+-[ "$(git diff regen-hwN-source | wc -l)" -eq 0 ] && echo "OK: tree matches" || echo "FAIL: tree differs"
++# sanity-проверка: патч должен чисто применяться на свежий hw-starter
++git checkout -b sanity-check origin/hw-starter
++git apply --check /tmp/hwN.patch && echo OK
+ 
+-# 3. заменить файл на handoff-ветке и запушить
++# заменить файл на handoff и запушить
+ git checkout -B regen-hwN-handoff origin/hwN-handoff
+ cp /tmp/hwN.patch hwN.patch
+ git add hwN.patch
+-git commit -m "regen hwN.patch against current $BASE_BRANCH"
++git commit -m "regen hwN.patch against current hw-starter"
+ git push --force-with-lease origin regen-hwN-handoff:hwN-handoff
+ ```
+ 
+-## Smoke-тест после регенерации (полная имитация студенческого флоу)
++## Smoke-тест после регенерации
+ 
+-Чтобы убедиться, что hwN.patch применится на студенческий `week{N-1}` (а не только на чистую базу) — собери цепочку с нуля:
++Имитация студенческого флоу — чистая проверка цепочки:
+ 
+ ```bash
+-# для N=2: достаточно проверки на hw-starter (см. процедуру выше)
+-# для N≥3: имитируй студенческий путь
+ git checkout -b smoke-hwN origin/hw-starter
+-
+-# по очереди накатываем hw2.patch, hw3.patch, ..., hw(N-1).patch
+-for M in 2 3 ... $((N-1)); do
+-  curl -LO https://raw.githubusercontent.com/it-incubator/devops-hometask-01/hwM-handoff/hwM.patch
+-  git apply --index hwM.patch
+-  git commit -m "scaffold hwM"
+-  rm hwM.patch
+-done
+-
+-# теперь накатываем hwN.patch — должен применяться чисто
+ curl -LO https://raw.githubusercontent.com/it-incubator/devops-hometask-01/hwN-handoff/hwN.patch
+-git apply --check hwN.patch && echo "OK: cumulative chain works"
+ git apply --index hwN.patch
+ # дальше — повторяешь шаги ДЗ-N из методички md-lesson-devops-frontend
+ ```
+ 
+-Если на любом шаге `git apply` ругается — регенерация прошла некорректно или базовая ветка одного из ранних N изменилась без перегенерации последующих.
++Если на любом шаге что-то ломается — значит, регенерация прошла некорректно и пользовательский опыт ДЗ сломан.
+ 
+ ## Когда регенерировать обязательно
+ 
+-- Любое изменение `Makefile`, `back/src/app.module.ts`, или других «общих» файлов в `hw-starter` или любом `_internal/hw-M-source` → регенерируем все `hwK.patch` для K > M.
+-- Любое изменение в файлах, которые модифицируются `hwM.patch` (см. `git diff $BASE_BRANCH _internal/hw-M-source --stat`).
+-- Добавление новых файлов в `hw-starter` обычно безопасно — патчи их не трогают, регенерация не обязательна.
+-
+-Сомневаешься — гоняй полный smoke-тест по цепочке. Это надёжнее анализа.
+-
+-## История проблемы (для контекста)
+-
+-Изначально (до hw4) патчи генерировались как `diff(hw-starter, _internal/hw-N-source)`. Это работало для одиночной проверки (apply на hw-starter), но **не работало** для студентов — у которых на `week{N-1}` уже есть файлы из hw{N-1}.patch (как новые, так и модифицированные). Когда hwN.patch пытался создать те же файлы (`new file mode`) или применить hunks к hw-starter-версии файла — `git apply` падал.
+-
+-Фикс (применён начиная с hw4): патч генерируется как минимальная дельта от **предыдущей** `_internal/hw-{N-1}-source`. Тогда `git apply hwN.patch` на `week{N-1}` (≈ `hw-{N-1}-source` + студенческие данные) накладывается чисто, потому что начальное состояние совпадает.
++- Любое изменение `Makefile` в `hw-starter`.
++- Любое изменение в файлах, которые модифицируются `hwN.patch` (см. `git diff hw-starter _internal/hw-N-source --stat`).
++- Добавление новых файлов в `hw-starter` обычно безопасно — патч их не трогает, регенерация не обязательна.
+ 
+-Для hw2 этого вопроса нет — там предыдущая база и есть `hw-starter`.
++Сомневаешься — гоняй smoke-тест. Это надёжнее анализа.
+diff --git a/Makefile b/Makefile
+index 8f4342e..7dda043 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,39 +1,103 @@
+-build-back: ## Build the back docker image
+-	docker build -t todo-back back
++# Makefile для hw2: docker compose + публикация образов на Docker Hub.
++#
++# ВНИМАНИЕ: этот Makefile — часть задания, его менять НЕ нужно.
++# Если кажется, что цель «не работает» — почти наверняка ошибка в
++# docker-compose.yml или в env-файлах, а не здесь.
++#
++# Переменные DOCKERHUB_USERNAME и IMAGE_TAG живут в .env.development.compose:
++#   - в build/push-целях подсасываются через `. ./.env.development.compose && ...`
++#     (тот же приём, что в hw1 для VITE_API_URL — обрати внимание на $$VAR-экранирование)
++#   - в compose-целях передаются флагом `--env-file .env.development.compose`
++#     (compose подставит ${DOCKERHUB_USERNAME} и ${IMAGE_TAG} в docker-compose.yml)
++#
++# Все образы собираются под --platform linux/amd64 — single-arch, чтобы образ
++# с твоего Mac M1 запустился на amd64-машине проверяющего.
+ 
+-build-front: ## Build the front docker image (needs .env.development.front)
+-	. ./.env.development.front && docker build --build-arg "VITE_API_URL=$$VITE_API_URL" -t todo-front front
++# ---------- build (локально, под публикацию) ----------
+ 
+-network: ## Create the user-defined network (idempotent)
+-	docker network inspect todo-net >/dev/null 2>&1 || docker network create todo-net
++build-back: ## Собрать образ todo-back и протегировать как $IMAGE_TAG и latest
++	. ./.env.development.compose && \
++	  docker build --platform linux/amd64 \
++	    -t $$DOCKERHUB_USERNAME/todo-back:$$IMAGE_TAG \
++	    -t $$DOCKERHUB_USERNAME/todo-back:latest \
++	    back
+ 
+-network-rm: ## Remove the user-defined network
+-	docker network rm todo-net
++build-front: ## Собрать образ todo-front (с VITE_API_URL) и протегировать
++	. ./.env.development.compose && . ./.env.development.front && \
++	  docker build --platform linux/amd64 \
++	    --build-arg "VITE_API_URL=$$VITE_API_URL" \
++	    -t $$DOCKERHUB_USERNAME/todo-front:$$IMAGE_TAG \
++	    -t $$DOCKERHUB_USERNAME/todo-front:latest \
++	    front
+ 
+-up-db: ## Start the db container (needs .env.development.db)
+-	docker run -d --name todo-db-container --network todo-net -p 15432:5432 --env-file .env.development.db postgres:16-alpine
++build: build-back build-front ## Собрать оба образа
+ 
+-up-back: ## Start the back container (needs .env.development.back)
+-	docker run -d --name todo-back-container --network todo-net -p 13000:3000 --env-file .env.development.back todo-back
++# ---------- push на Docker Hub ----------
+ 
+-up-front: ## Start the front container
+-	docker run -d --name todo-front-container -p 18080:80 todo-front
++push-back: ## Запушить оба тега todo-back
++	. ./.env.development.compose && \
++	  docker push $$DOCKERHUB_USERNAME/todo-back:$$IMAGE_TAG && \
++	  docker push $$DOCKERHUB_USERNAME/todo-back:latest
+ 
+-down-db: ## Stop and remove the db container
+-	docker rm -f todo-db-container
++push-front: ## Запушить оба тега todo-front
++	. ./.env.development.compose && \
++	  docker push $$DOCKERHUB_USERNAME/todo-front:$$IMAGE_TAG && \
++	  docker push $$DOCKERHUB_USERNAME/todo-front:latest
+ 
+-down-back: ## Stop and remove the back container
+-	docker rm -f todo-back-container
++push: push-back push-front ## Запушить оба образа
+ 
+-down-front: ## Stop and remove the front container
+-	docker rm -f todo-front-container
++# ---------- compose lifecycle ----------
+ 
+-up: build-back build-front network up-db up-back up-front ## Build images, create network and start all three containers
++pull: ## Скачать образы с Docker Hub (НЕ собирать локально)
++	docker compose --env-file .env.development.compose pull
+ 
+-down: down-front down-back down-db network-rm ## Stop and remove all containers and the network
++up: ## Поднять стек в фоне (compose сам соблюдёт depends_on/healthcheck)
++	docker compose --env-file .env.development.compose up -d
+ 
+-e2e-install: ## Install front npm deps and the playwright browser (run once)
++down: ## Погасить стек, named volume pgdata сохраняется
++	docker compose --env-file .env.development.compose down
++
++down-v: ## Погасить стек + удалить named volume pgdata (сбрасывает БД)
++	docker compose --env-file .env.development.compose down -v
++
++logs: ## Стримить логи всех сервисов
++	docker compose --env-file .env.development.compose logs -f
++
++ps: ## Показать статус контейнеров
++	docker compose --env-file .env.development.compose ps
++
++# ---------- e2e (как в hw1) ----------
++
++e2e-install: ## Один раз: ставит npm-зависимости фронта и качает Chromium для Playwright
+ 	cd front && npm install && npx playwright install chromium
+ 
+-e2e: ## Run Playwright e2e tests (headless)
++e2e: ## Прогнать Playwright-тесты против локального стека (через docker compose)
+ 	set -a && . ./.env.development.e2e && cd front && npm run e2e
++
++e2e-deployed: ## Прогнать Playwright-тесты против развернутого инстанса на VPS (нужен .env.production.e2e)
++	set -a && . ./.env.production.e2e && cd front && npm run e2e
++
++# ---------- smoke (для hw4: lightweight verify после деплоя) ----------
++
++smoke-deployed: ## Read-only smoke-проверка задеплоенного стека (нужен .env.production.e2e)
++	set -a && . ./.env.production.e2e && bash scripts/smoke.sh
++
++# ---------- observability (hw5: Prometheus + Grafana + Loki + Promtail) ----------
++#
++# Observability-стек живёт в отдельном файле docker-compose.observability.yml
++# и поднимается вместе с прод-сервисами через два `-f`. Прод-сервисы
++# (db/back/front) при этом не пересоздаются — compose видит, что они уже Up.
++#
++# Запускать на VPS один раз — стек самодостаточный, CI/CD из hw4 продолжает
++# деплоить только back/front через `--no-deps` и observability не трогает.
++
++COMPOSE_FILES_OBS := -f docker-compose.yml -f docker-compose.observability.yml
++
++up-observability: ## Поднять весь стек (прод + observability)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose up -d
++
++down-observability: ## Погасить весь стек (volumes сохраняются)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose down
++
++down-observability-v: ## Погасить весь стек И удалить observability-volumes (сбрасывает пароль Grafana, историю метрик/логов)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose down -v
+diff --git a/app-config/app.json b/app-config/app.json
+new file mode 100644
+index 0000000..37eb1aa
+--- /dev/null
++++ b/app-config/app.json
+@@ -0,0 +1,3 @@
++{
++  "maxTodos": 5
++}
+diff --git a/back/package-lock.json b/back/package-lock.json
+index 14bf5bc..b149988 100644
+--- a/back/package-lock.json
++++ b/back/package-lock.json
+@@ -17,6 +17,7 @@
+         "class-transformer": "^0.5.1",
+         "class-validator": "^0.14.1",
+         "pg": "^8.12.0",
++        "prom-client": "^15.1.3",
+         "reflect-metadata": "^0.2.2",
+         "rxjs": "^7.8.1",
+         "typeorm": "^0.3.20"
+@@ -776,6 +777,15 @@
+         "npm": ">=5.0.0"
+       }
+     },
++    "node_modules/@opentelemetry/api": {
++      "version": "1.9.1",
++      "resolved": "https://registry.npmjs.org/@opentelemetry/api/-/api-1.9.1.tgz",
++      "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==",
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=8.0.0"
++      }
++    },
+     "node_modules/@pkgjs/parseargs": {
+       "version": "0.11.0",
+       "resolved": "https://registry.npmjs.org/@pkgjs/parseargs/-/parseargs-0.11.0.tgz",
+@@ -1497,6 +1507,12 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/bintrees": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/bintrees/-/bintrees-1.0.2.tgz",
++      "integrity": "sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==",
++      "license": "MIT"
++    },
+     "node_modules/bl": {
+       "version": "4.1.0",
+       "resolved": "https://registry.npmjs.org/bl/-/bl-4.1.0.tgz",
+@@ -3924,6 +3940,19 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/prom-client": {
++      "version": "15.1.3",
++      "resolved": "https://registry.npmjs.org/prom-client/-/prom-client-15.1.3.tgz",
++      "integrity": "sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@opentelemetry/api": "^1.4.0",
++        "tdigest": "^0.1.1"
++      },
++      "engines": {
++        "node": "^16 || ^18 || >=20"
++      }
++    },
+     "node_modules/proxy-addr": {
+       "version": "2.0.7",
+       "resolved": "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.7.tgz",
+@@ -4600,6 +4629,15 @@
+         "url": "https://opencollective.com/webpack"
+       }
+     },
++    "node_modules/tdigest": {
++      "version": "0.1.2",
++      "resolved": "https://registry.npmjs.org/tdigest/-/tdigest-0.1.2.tgz",
++      "integrity": "sha512-+G0LLgjjo9BZX2MfdvPfH+MKLCrxlXSYec5DaPYP1fe6Iyhf0/fSmJ0bFiZ1F8BT6cGXl2LpltQptzjXKWEkKA==",
++      "license": "MIT",
++      "dependencies": {
++        "bintrees": "1.0.2"
++      }
++    },
+     "node_modules/terser": {
+       "version": "5.47.1",
+       "resolved": "https://registry.npmjs.org/terser/-/terser-5.47.1.tgz",
+diff --git a/back/package.json b/back/package.json
+index b832118..1afa238 100644
+--- a/back/package.json
++++ b/back/package.json
+@@ -19,6 +19,7 @@
+     "class-transformer": "^0.5.1",
+     "class-validator": "^0.14.1",
+     "pg": "^8.12.0",
++    "prom-client": "^15.1.3",
+     "reflect-metadata": "^0.2.2",
+     "rxjs": "^7.8.1",
+     "typeorm": "^0.3.20"
+diff --git a/back/src/app.module.ts b/back/src/app.module.ts
+index f610996..38e9331 100644
+--- a/back/src/app.module.ts
++++ b/back/src/app.module.ts
+@@ -1,8 +1,12 @@
+-import { Module } from '@nestjs/common';
++import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+ import { ConfigModule, ConfigService } from '@nestjs/config';
+ import { TypeOrmModule } from '@nestjs/typeorm';
+ import { TodosModule } from './todos/todos.module';
+ import { Todo } from './todos/todo.entity';
++import { TestResetModule } from './test-reset/test-reset.module';
++import { HealthModule } from './health/health.module';
++import { MetricsModule } from './metrics/metrics.module';
++import { MetricsMiddleware } from './metrics/metrics.middleware';
+ 
+ @Module({
+   imports: [
+@@ -21,6 +25,18 @@ import { Todo } from './todos/todo.entity';
+       }),
+     }),
+     TodosModule,
++    TestResetModule,
++    HealthModule,
++    MetricsModule,
+   ],
+ })
+-export class AppModule {}
++export class AppModule implements NestModule {
++  configure(consumer: MiddlewareConsumer): void {
++    // Меряем все маршруты, кроме /metrics (self-probe) и /health
++    // (служебный эндпоинт smoke-проверки и AI-агента — не пользовательский трафик).
++    consumer
++      .apply(MetricsMiddleware)
++      .exclude('metrics', 'health')
++      .forRoutes('*');
++  }
++}
+diff --git a/back/src/health/health.controller.ts b/back/src/health/health.controller.ts
+new file mode 100644
+index 0000000..7329477
+--- /dev/null
++++ b/back/src/health/health.controller.ts
+@@ -0,0 +1,19 @@
++import { Controller, Get } from '@nestjs/common';
++import { ApiExcludeController } from '@nestjs/swagger';
++
++// Health-эндпоинт для hw4: smoke-проверка и AI-агент сверяют version
++// с APP_VERSION на сервере. Подкручен из env-переменной APP_VERSION,
++// которую compose прокидывает в контейнер из .env.development.compose.
++// Если переменной нет — отдаём 'unknown' (не падаем).
++
++@ApiExcludeController()
++@Controller('health')
++export class HealthController {
++  @Get()
++  getHealth(): { status: 'ok'; version: string } {
++    return {
++      status: 'ok',
++      version: process.env.APP_VERSION ?? 'unknown',
++    };
++  }
++}
+diff --git a/back/src/health/health.module.ts b/back/src/health/health.module.ts
+new file mode 100644
+index 0000000..7476abe
+--- /dev/null
++++ b/back/src/health/health.module.ts
+@@ -0,0 +1,7 @@
++import { Module } from '@nestjs/common';
++import { HealthController } from './health.controller';
++
++@Module({
++  controllers: [HealthController],
++})
++export class HealthModule {}
+diff --git a/back/src/metrics/metrics.controller.ts b/back/src/metrics/metrics.controller.ts
+new file mode 100644
+index 0000000..49d8728
+--- /dev/null
++++ b/back/src/metrics/metrics.controller.ts
+@@ -0,0 +1,20 @@
++import { Controller, Get, Res } from '@nestjs/common';
++import { Response } from 'express';
++import { register } from 'prom-client';
++import { ApiExcludeController } from '@nestjs/swagger';
++
++// Эндпоинт /metrics для hw5: Prometheus сам приходит сюда раз в 15 секунд
++// и забирает текстовый snapshot всех зарегистрированных метрик.
++// Контракт: ответ должен иметь Content-Type 'text/plain; version=0.0.4'
++// и тело в формате Prometheus exposition (строки `# HELP`, `# TYPE`,
++// затем сами метрики). prom-client это всё формирует сам.
++
++@ApiExcludeController()
++@Controller('metrics')
++export class MetricsController {
++  @Get()
++  async getMetrics(@Res() res: Response): Promise<void> {
++    res.set('Content-Type', register.contentType);
++    res.end(await register.metrics());
++  }
++}
+diff --git a/back/src/metrics/metrics.middleware.ts b/back/src/metrics/metrics.middleware.ts
+new file mode 100644
+index 0000000..26ba4e7
+--- /dev/null
++++ b/back/src/metrics/metrics.middleware.ts
+@@ -0,0 +1,49 @@
++import { Injectable, NestMiddleware } from '@nestjs/common';
++import { Request, Response, NextFunction } from 'express';
++import { Counter, Histogram } from 'prom-client';
++
++// Кастомные метрики hw5: фиксируем время ответа и количество HTTP-запросов
++// в разрезе method/route/status_code. Эти два объекта живут в дефолтном
++// реестре prom-client; их же отдаёт /metrics через register.metrics().
++//
++// Buckets подобраны под «обычное web-API»: основная масса запросов
++// до 0.5s, чем выше — тем интереснее с точки зрения медленных хвостов.
++
++export const httpRequestDuration = new Histogram({
++  name: 'http_response_time_seconds',
++  help: 'Duration of HTTP requests in seconds',
++  labelNames: ['method', 'route', 'status_code'],
++  buckets: [0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5],
++});
++
++export const httpRequestsTotal = new Counter({
++  name: 'http_requests_total',
++  help: 'Total number of HTTP requests',
++  labelNames: ['method', 'route', 'status_code'],
++});
++
++interface ExpressRoute {
++  path: string;
++}
++
++@Injectable()
++export class MetricsMiddleware implements NestMiddleware {
++  use(req: Request, res: Response, next: NextFunction): void {
++    const end = httpRequestDuration.startTimer();
++
++    res.on('finish', () => {
++      // req.route появляется ПОСЛЕ матчинга роута Express'ом — если запрос ушёл
++      // в 404 (роут не найден), req.route будет undefined; падаем обратно на req.path.
++      const route = (req.route as ExpressRoute | undefined)?.path ?? req.path;
++      const labels = {
++        method: req.method,
++        route,
++        status_code: res.statusCode,
++      };
++      end(labels);
++      httpRequestsTotal.inc(labels);
++    });
++
++    next();
++  }
++}
+diff --git a/back/src/metrics/metrics.module.ts b/back/src/metrics/metrics.module.ts
+new file mode 100644
+index 0000000..b1296ee
+--- /dev/null
++++ b/back/src/metrics/metrics.module.ts
+@@ -0,0 +1,17 @@
++import { Module } from '@nestjs/common';
++import { collectDefaultMetrics } from 'prom-client';
++import { MetricsController } from './metrics.controller';
++
++// collectDefaultMetrics() в конструкторе модуля включает сборку стандартных
++// метрик Node.js-процесса: heap, event loop lag, GC, активные handles.
++// Эти метрики появляются автоматически в дефолтном реестре, никакой явной
++// регистрации не требуется.
++
++@Module({
++  controllers: [MetricsController],
++})
++export class MetricsModule {
++  constructor() {
++    collectDefaultMetrics();
++  }
++}
+diff --git a/back/src/test-reset/test-reset.controller.ts b/back/src/test-reset/test-reset.controller.ts
+new file mode 100644
+index 0000000..b3d3bd0
+--- /dev/null
++++ b/back/src/test-reset/test-reset.controller.ts
+@@ -0,0 +1,36 @@
++import {
++  Controller,
++  ForbiddenException,
++  Headers,
++  HttpCode,
++  HttpStatus,
++  Post,
++} from '@nestjs/common';
++import { InjectRepository } from '@nestjs/typeorm';
++import { ApiExcludeController } from '@nestjs/swagger';
++import { Repository } from 'typeorm';
++import { Todo } from '../todos/todo.entity';
++
++// Курсовой shared-токен: знают тесты студента, AI-агент-проверяющий и бекенд.
++// Менять не нужно — он одинаковый на весь поток. То же значение прошито в
++// front/e2e/helpers.ts.
++const E2E_RESET_TOKEN = 'e2e-reset-course-DevOps-2026';
++
++@ApiExcludeController()
++@Controller('test')
++export class TestResetController {
++  constructor(
++    @InjectRepository(Todo) private readonly todos: Repository<Todo>,
++  ) {}
++
++  @Post('reset')
++  @HttpCode(HttpStatus.NO_CONTENT)
++  async reset(
++    @Headers('x-e2e-reset-token') token: string | undefined,
++  ): Promise<void> {
++    if (token !== E2E_RESET_TOKEN) {
++      throw new ForbiddenException();
++    }
++    await this.todos.clear();
++  }
++}
+diff --git a/back/src/test-reset/test-reset.module.ts b/back/src/test-reset/test-reset.module.ts
+new file mode 100644
+index 0000000..fcc6305
+--- /dev/null
++++ b/back/src/test-reset/test-reset.module.ts
+@@ -0,0 +1,10 @@
++import { Module } from '@nestjs/common';
++import { TypeOrmModule } from '@nestjs/typeorm';
++import { Todo } from '../todos/todo.entity';
++import { TestResetController } from './test-reset.controller';
++
++@Module({
++  imports: [TypeOrmModule.forFeature([Todo])],
++  controllers: [TestResetController],
++})
++export class TestResetModule {}
+diff --git a/back/src/todos/todos.service.ts b/back/src/todos/todos.service.ts
+index 24c5d27..f19303b 100644
+--- a/back/src/todos/todos.service.ts
++++ b/back/src/todos/todos.service.ts
+@@ -1,10 +1,48 @@
+-import { Injectable, NotFoundException } from '@nestjs/common';
++import {
++  BadRequestException,
++  Injectable,
++  InternalServerErrorException,
++  NotFoundException,
++} from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+ import { Repository } from 'typeorm';
++import { readFileSync } from 'node:fs';
+ import { Todo } from './todo.entity';
+ import { CreateTodoDto } from './dto/create-todo.dto';
+ import { UpdateTodoDto } from './dto/update-todo.dto';
+ 
++const APP_CONFIG_PATH = '/app/config/app.json';
++
++interface AppConfig {
++  maxTodos: number;
++}
++
++function readAppConfig(): AppConfig {
++  let raw: string;
++  try {
++    raw = readFileSync(APP_CONFIG_PATH, 'utf8');
++  } catch (e) {
++    throw new InternalServerErrorException(
++      `Cannot read runtime config at ${APP_CONFIG_PATH}: ${(e as Error).message}`,
++    );
++  }
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch (e) {
++    throw new InternalServerErrorException(
++      `Runtime config at ${APP_CONFIG_PATH} is not valid JSON: ${(e as Error).message}`,
++    );
++  }
++  const max = (parsed as { maxTodos?: unknown })?.maxTodos;
++  if (typeof max !== 'number' || !Number.isFinite(max) || max < 0) {
++    throw new InternalServerErrorException(
++      `Runtime config at ${APP_CONFIG_PATH} must contain numeric "maxTodos" >= 0`,
++    );
++  }
++  return { maxTodos: max };
++}
++
+ @Injectable()
+ export class TodosService {
+   constructor(
+@@ -21,7 +59,14 @@ export class TodosService {
+     return todo;
+   }
+ 
+-  create(dto: CreateTodoDto): Promise<Todo> {
++  async create(dto: CreateTodoDto): Promise<Todo> {
++    const { maxTodos } = readAppConfig();
++    const count = await this.repo.count();
++    if (count >= maxTodos) {
++      throw new BadRequestException(
++        `Todo limit reached (${count}/${maxTodos}). Increase "maxTodos" in app config.`,
++      );
++    }
+     const todo = this.repo.create({
+       title: dto.title,
+       description: dto.description ?? null,
+diff --git a/docker-compose.observability.yml b/docker-compose.observability.yml
+new file mode 100644
+index 0000000..261546c
+--- /dev/null
++++ b/docker-compose.observability.yml
+@@ -0,0 +1,103 @@
++# Observability-стек для hw5.
++#
++# Этот файл — override-compose, накладывается поверх основного docker-compose.yml:
++#
++#   docker compose -f docker-compose.yml -f docker-compose.observability.yml \
++#                  --env-file .env.development.compose up -d
++#
++# Удобнее через Makefile-цели: `make up-observability` / `make down-observability`.
++#
++# Контракт:
++#   - все 5 сервисов слушают ТОЛЬКО на 127.0.0.1 (snaplisten).
++#     Docker пишет правила в iptables в обход UFW, поэтому биндинг без
++#     явного 127.0.0.1 = порт виден снаружи на публичном IP.
++#   - наружу через системный nginx + TLS выставляется ТОЛЬКО Grafana
++#     (subdomain grafana.<твой-домен>); остальное смотрится через SSH-туннель.
++#   - все сервисы живут в общей docker-сети app-network (она объявлена
++#     в основном docker-compose.yml).
++
++services:
++  prometheus:
++    image: prom/prometheus:latest
++    container_name: prometheus
++    ports:
++      - "127.0.0.1:9090:9090"
++    volumes:
++      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
++      - prometheus_data:/prometheus
++    command:
++      - '--config.file=/etc/prometheus/prometheus.yml'
++      - '--storage.tsdb.retention.time=15d'
++    restart: unless-stopped
++    networks:
++      - app-network
++
++  node-exporter:
++    image: prom/node-exporter:latest
++    container_name: node-exporter
++    pid: host
++    volumes:
++      - /proc:/host/proc:ro
++      - /sys:/host/sys:ro
++      - /:/rootfs:ro
++    command:
++      - '--path.procfs=/host/proc'
++      - '--path.sysfs=/host/sys'
++      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
++    restart: unless-stopped
++    networks:
++      - app-network
++
++  grafana:
++    image: grafana/grafana:latest
++    container_name: grafana
++    ports:
++      - "127.0.0.1:3000:3000"
++    volumes:
++      - grafana_data:/var/lib/grafana
++      - ./monitoring/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
++    environment:
++      - GF_SECURITY_ADMIN_USER=admin
++      - GF_SECURITY_ADMIN_PASSWORD=admin
++    depends_on:
++      - prometheus
++      - loki
++    restart: unless-stopped
++    networks:
++      - app-network
++
++  loki:
++    image: grafana/loki:latest
++    container_name: loki
++    ports:
++      - "127.0.0.1:3100:3100"
++    volumes:
++      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml:ro
++      - loki_data:/loki
++    command: -config.file=/etc/loki/local-config.yaml
++    restart: unless-stopped
++    networks:
++      - app-network
++
++  promtail:
++    image: grafana/promtail:latest
++    container_name: promtail
++    volumes:
++      - /var/lib/docker/containers:/var/lib/docker/containers:ro
++      - /var/run/docker.sock:/var/run/docker.sock
++      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yml:ro
++    command: -config.file=/etc/promtail/config.yml
++    privileged: true
++    depends_on:
++      - loki
++    restart: unless-stopped
++    networks:
++      - app-network
++
++volumes:
++  prometheus_data:
++  grafana_data:
++  loki_data:
++
++networks:
++  app-network:
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000..3d2ce7c
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,54 @@
++# Docker Compose файл для hw2.
++#
++# Имя образа для back/front собирается из переменных DOCKERHUB_USERNAME и IMAGE_TAG —
++# их compose берёт из .env.development.compose, который мы передаём флагом --env-file
++# (см. Makefile).
++#
++# В этом файле НИГДЕ не должно быть сборки из исходников: образы должны браться
++# готовыми с Docker Hub. Если потребуется собрать — это делает Makefile, не compose.
++
++services:
++  db:
++    # TODO — база данных:
++    #   - указать готовый образ postgres 16-alpine
++    #   - подать переменные окружения из соответствующего env-файла
++    #   - пробросить порт наружу на 15432 (внешний выбран так, чтобы не конфликтовать
++    #     с локально установленным Postgres)
++    #   - персистить данные через NAMED VOLUME (не bind-mount); имя тома — pgdata
++    #   - добавить проверку готовности: запрос к самой БД через pg_isready,
++    #     с использованием POSTGRES_USER и POSTGRES_DB
++    #     ⚠️ переменные окружения внутри проверки экранируются двойным $$,
++    #     иначе compose попытается подставить их сам на этапе парсинга файла
++    #     (а нам надо, чтобы их разворачивал shell внутри контейнера в рантайме)
++    #   - подобрать осмысленные параметры проверки: как часто опрашивать, сколько
++    #     попыток до признания unhealthy, сколько ждать перед самой первой проверкой
++
++  back:
++    # TODO — backend (NestJS):
++    #   - указать образ, который ты публикуешь в свой Docker Hub репозиторий
++    #     (используй переменные DOCKERHUB_USERNAME и IMAGE_TAG)
++    #   - указать платформу образа linux/amd64 (см. раздел «Платформа» в задании —
++    #     на Apple Silicon без этого compose pull запросит arm64-манифест и упадёт,
++    #     потому что мы публикуем single-arch amd64-образы)
++    #   - подать переменные окружения из соответствующего env-файла
++    #     (не забудь: в нём DB_HOST теперь смотрит на service-name из compose-сети)
++    #   - пробросить порт API на 13000
++    #   - выразить зависимость от базы: back не должен стартовать, пока БД не
++    #     ответит на healthcheck успешно (используй подходящую condition)
++    #   - примонтировать локальную папку с runtime-конфигом внутрь контейнера
++    #     по пути /app/config; делаем это READ-ONLY, чтобы контейнер физически
++    #     не мог изменить файл на хосте
++
++  front:
++    # TODO — frontend (nginx со статикой):
++    #   - указать образ из своего Docker Hub репозитория
++    #   - указать платформу образа linux/amd64 (по той же причине, что у back)
++    #   - пробросить 80-й порт nginx наружу на 18080
++    #   - выразить зависимость от back, но НЕ через service_healthy:
++    #     у back в этом задании нет healthcheck, поэтому здесь нужна другая condition
++    #     (которая ждёт только запуска контейнера, не его health-статуса)
++
++volumes:
++  # TODO — секция named volumes:
++  #   - объявить том, имя которого ты указал в сервисе db (без дополнительных опций,
++  #     пустого тела достаточно)
+diff --git a/front/e2e/helpers.ts b/front/e2e/helpers.ts
+index e633eb7..684e605 100644
+--- a/front/e2e/helpers.ts
++++ b/front/e2e/helpers.ts
+@@ -5,19 +5,20 @@ const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
+   '',
+ );
+ 
++// Курсовой shared-токен. То же значение прошито в back/src/test-reset/test-reset.controller.ts.
++const E2E_RESET_TOKEN = 'e2e-reset-course-DevOps-2026';
++
+ /**
+- * Wipe all todos via the API so each test starts from a clean state.
+- * Single-user app — no auth needed.
++ * Wipe all todos via the protected reset endpoint so each test starts
++ * from a clean state. Works against any environment (local or deployed).
+  */
+ export async function resetTodos(api?: APIRequestContext) {
+   const ctx = api ?? (await request.newContext());
+-  const res = await ctx.get(`${API}/todos`);
++  const res = await ctx.post(`${API}/test/reset`, {
++    headers: { 'x-e2e-reset-token': E2E_RESET_TOKEN },
++  });
+   if (!res.ok()) {
+-    throw new Error(`Failed to list todos: ${res.status()}`);
+-  }
+-  const todos: Array<{ id: string }> = await res.json();
+-  for (const t of todos) {
+-    await ctx.delete(`${API}/todos/${t.id}`);
++    throw new Error(`Reset failed: ${res.status()} ${res.statusText()}`);
+   }
+   if (!api) await ctx.dispose();
+ }
+diff --git a/front/e2e/limit.spec.ts b/front/e2e/limit.spec.ts
+new file mode 100644
+index 0000000..c5fa7b5
+--- /dev/null
++++ b/front/e2e/limit.spec.ts
+@@ -0,0 +1,31 @@
++import { expect, test, request } from '@playwright/test';
++import { resetTodos } from './helpers';
++
++const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
++  /\/$/,
++  '',
++);
++
++test.beforeEach(async () => {
++  await resetTodos();
++});
++
++test('rejects creation when maxTodos limit is reached', async () => {
++  // Default committed config is { "maxTodos": 5 }.
++  // Если этот тест падает с 500 на первом же POST — скорее всего bind-mount
++  // ./app-config:/app/config:ro не настроен и back не может прочитать конфиг.
++  const ctx = await request.newContext();
++
++  for (let i = 1; i <= 5; i++) {
++    const res = await ctx.post(`${API}/todos`, { data: { title: `todo ${i}` } });
++    expect(res.status(), `creating todo #${i} should succeed`).toBe(201);
++  }
++
++  const overflow = await ctx.post(`${API}/todos`, { data: { title: 'overflow' } });
++  expect(overflow.status()).toBe(400);
++
++  const body = (await overflow.json()) as { message?: string };
++  expect(body.message ?? '').toMatch(/limit/i);
++
++  await ctx.dispose();
++});
+diff --git a/front/e2e/metrics.spec.ts b/front/e2e/metrics.spec.ts
+new file mode 100644
+index 0000000..67657eb
+--- /dev/null
++++ b/front/e2e/metrics.spec.ts
+@@ -0,0 +1,76 @@
++import { expect, request as pwRequest, test } from '@playwright/test';
++
++// Тесты hw5 — проверяют, что backend отдаёт метрики в формате Prometheus
++// и что кастомная middleware действительно записывает время ответа.
++// Гоняется и локально (`make e2e`), и против VPS (`make e2e-deployed`).
++
++const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
++  /\/$/,
++  '',
++);
++
++test('exposes /metrics in Prometheus text format', async () => {
++  const ctx = await pwRequest.newContext();
++  const res = await ctx.get(`${API}/metrics`);
++  expect(res.status()).toBe(200);
++  expect(res.headers()['content-type'] ?? '').toMatch(/text\/plain/);
++
++  const body = await res.text();
++  expect(body).toContain('# HELP');
++  expect(body).toContain('# TYPE');
++
++  await ctx.dispose();
++});
++
++test('exposes default Node.js process metrics', async () => {
++  const ctx = await pwRequest.newContext();
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  expect(body).toMatch(/nodejs_heap_size_used_bytes\s/);
++  expect(body).toMatch(/process_cpu_user_seconds_total\s/);
++
++  await ctx.dispose();
++});
++
++test('records http_response_time_seconds for API traffic', async () => {
++  const ctx = await pwRequest.newContext();
++
++  // Дёргаем настоящий роут чтобы middleware записал замер.
++  await ctx.get(`${API}/todos`);
++  await ctx.get(`${API}/todos`);
++
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  // Ищем счётчик histogram'а: имя_count{лейблы} число.
++  // Хотя бы один матч с method="GET" должен быть после двух GET-запросов.
++  expect(body).toMatch(
++    /http_response_time_seconds_count\{[^}]*method="GET"[^}]*\}\s+\d+/,
++  );
++
++  await ctx.dispose();
++});
++
++test('excludes /metrics and /health from histogram (self-probe protection)', async () => {
++  const ctx = await pwRequest.newContext();
++
++  // Стучимся в /metrics и /health дважды — ни один из них не должен
++  // появиться в самом histogram'е, иначе middleware «измеряет себя».
++  await ctx.get(`${API}/metrics`);
++  await ctx.get(`${API}/health`);
++  await ctx.get(`${API}/metrics`);
++  await ctx.get(`${API}/health`);
++
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  expect(body).not.toMatch(
++    /http_response_time_seconds_count\{[^}]*route="\/metrics"/,
++  );
++  expect(body).not.toMatch(
++    /http_response_time_seconds_count\{[^}]*route="\/health"/,
++  );
++
++  await ctx.dispose();
++});
+diff --git a/monitoring/grafana/provisioning/datasources.yml b/monitoring/grafana/provisioning/datasources.yml
+new file mode 100644
+index 0000000..ddba528
+--- /dev/null
++++ b/monitoring/grafana/provisioning/datasources.yml
+@@ -0,0 +1,23 @@
++# Provisioning datasources для Grafana — hw5.
++#
++# При старте Grafana читает этот файл и автоматически подключает Prometheus
++# и Loki. Не нужно ходить в UI и добавлять руками.
++#
++# URL'ы используют service-имена docker-сети (`prometheus`, `loki`), а не
++# localhost — Grafana обращается к ним изнутри docker-сети.
++
++apiVersion: 1
++
++datasources:
++  - name: Prometheus
++    type: prometheus
++    access: proxy
++    url: http://prometheus:9090
++    isDefault: true
++    editable: true
++
++  - name: Loki
++    type: loki
++    access: proxy
++    url: http://loki:3100
++    editable: true
+diff --git a/monitoring/loki-config.yaml b/monitoring/loki-config.yaml
+new file mode 100644
+index 0000000..6e6a085
+--- /dev/null
++++ b/monitoring/loki-config.yaml
+@@ -0,0 +1,32 @@
++# Конфигурация Loki для hw5 — single-node, без авторизации.
++#
++# Этого достаточно для учебного приложения и одного VPS. Под прод-нагрузку
++# Loki разворачивается distributed (отдельный distributor, ingester, querier),
++# но это сильно за пределами курса.
++
++auth_enabled: false
++
++server:
++  http_listen_port: 3100
++
++common:
++  ring:
++    instance_addr: 127.0.0.1
++    kvstore:
++      store: inmemory
++  replication_factor: 1
++  path_prefix: /tmp/loki
++
++schema_config:
++  configs:
++    - from: 2020-05-15
++      store: tsdb
++      object_store: filesystem
++      schema: v13
++      index:
++        prefix: index_
++        period: 24h
++
++storage_config:
++  filesystem:
++    directory: /tmp/loki/chunks
+diff --git a/monitoring/prometheus.yml b/monitoring/prometheus.yml
+new file mode 100644
+index 0000000..2ffe273
+--- /dev/null
++++ b/monitoring/prometheus.yml
+@@ -0,0 +1,29 @@
++# Конфигурация сбора метрик для hw5.
++#
++# Prometheus работает по pull-модели: периодически опрашивает targets и
++# скачивает метрики по HTTP. Каждый таргет должен отдавать на /metrics
++# текст в формате Prometheus exposition.
++#
++# Targets указаны через service-имена docker-compose сети (`back`, `node-exporter`),
++# а не через localhost — внутри docker-сети сервисы видят друг друга по именам.
++
++global:
++  scrape_interval: 15s
++  evaluation_interval: 15s
++
++scrape_configs:
++  # Сам Prometheus тоже отдаёт метрики на /metrics.
++  - job_name: 'prometheus'
++    static_configs:
++      - targets: ['localhost:9090']
++
++  # Системные метрики хоста: CPU, RAM, диск, сеть.
++  - job_name: 'node-exporter'
++    static_configs:
++      - targets: ['node-exporter:9100']
++
++  # Метрики NestJS-приложения: default Node.js + кастомный HTTP-гистограмма.
++  # Порт 3000 — внутренний порт контейнера back в docker-сети.
++  - job_name: 'back'
++    static_configs:
++      - targets: ['back:3000']
+diff --git a/monitoring/promtail-config.yaml b/monitoring/promtail-config.yaml
+new file mode 100644
+index 0000000..76b2ce6
+--- /dev/null
++++ b/monitoring/promtail-config.yaml
+@@ -0,0 +1,44 @@
++# Конфигурация Promtail для hw5 — собирает логи из всех контейнеров docker.
++#
++# docker_sd_configs делает service discovery через Docker API: Promtail сам
++# находит все запущенные контейнеры, не нужно перечислять каждый.
++# relabel_configs прокидывает Docker-метаданные в лейблы Loki:
++#   - container — имя контейнера (с обрезанным ведущим слэшем)
++#   - service   — имя сервиса docker-compose (по нему фильтруем в Grafana)
++#   - image     — образ
++# По этим лейблам потом ищем логи через LogQL.
++
++server:
++  http_listen_port: 9080
++  grpc_listen_port: 0
++
++positions:
++  filename: /tmp/positions.yaml
++
++clients:
++  - url: http://loki:3100/loki/api/v1/push
++
++scrape_configs:
++  - job_name: docker
++    pipeline_stages:
++      - docker: {}
++
++    docker_sd_configs:
++      - host: unix:///var/run/docker.sock
++
++    relabel_configs:
++      - source_labels: ['__meta_docker_container_name']
++        target_label: 'container'
++        regex: '/(.*)'
++
++      - source_labels: ['__meta_docker_container_id']
++        target_label: 'container_id'
++
++      - source_labels: ['__meta_docker_container_image']
++        target_label: 'image'
++
++      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
++        target_label: 'service'
++
++      - source_labels: ['__meta_docker_container_log_stream']
++        target_label: 'stream'
+diff --git a/scripts/smoke.sh b/scripts/smoke.sh
+new file mode 100755
+index 0000000..d48552c
+--- /dev/null
++++ b/scripts/smoke.sh
+@@ -0,0 +1,45 @@
++#!/usr/bin/env bash
++# Smoke-проверка задеплоенного стека для hw4+hw5 — лёгкий read-only health check.
++#
++# Используется в job'е `verify` пайплайна и доступна локально через `make smoke-deployed`.
++# В отличие от `make e2e-deployed` (Playwright + reset todos) — НЕ мутирует данные:
++# только проверяет, что /api/health отвечает 200 со status=ok, что фронт отдаёт HTML
++# и (с hw5) что /api/metrics отдаёт текст в формате Prometheus exposition.
++#
++# Требует переменную окружения E2E_BASE_URL (вида https://your-domain.example).
++# Обычно подгружается из .env.production.e2e через `make smoke-deployed`.
++
++set -euo pipefail
++
++: "${E2E_BASE_URL:?E2E_BASE_URL must be set (e.g. https://your-domain.example)}"
++
++# Нормализуем trailing slash — на всякий случай.
++BASE="${E2E_BASE_URL%/}"
++
++echo "→ GET ${BASE}/api/health"
++HEALTH=$(curl -sSf --max-time 10 "${BASE}/api/health")
++echo "  ${HEALTH}"
++echo "${HEALTH}" | grep -q '"status":"ok"' || {
++  echo "✗ /api/health did not return status=ok"
++  exit 1
++}
++
++echo "→ GET ${BASE}/"
++INDEX=$(curl -sSf --max-time 10 "${BASE}/")
++echo "${INDEX}" | grep -qi '<title' || {
++  echo "✗ frontend did not return HTML (no <title> tag)"
++  exit 1
++}
++
++echo "→ GET ${BASE}/api/metrics"
++METRICS=$(curl -sSf --max-time 10 -H 'Accept: text/plain' "${BASE}/api/metrics")
++echo "${METRICS}" | grep -q '^# HELP' || {
++  echo "✗ /api/metrics did not return Prometheus exposition format (no '# HELP' lines)"
++  exit 1
++}
++echo "${METRICS}" | grep -q 'nodejs_heap_size_used_bytes' || {
++  echo "✗ /api/metrics missing default Node.js metrics (nodejs_heap_size_used_bytes)"
++  exit 1
++}
++
++echo "✓ smoke checks passed"
+diff --git a/teacher_authorized_key.pub b/teacher_authorized_key.pub
+new file mode 100644
+index 0000000..d157469
+--- /dev/null
++++ b/teacher_authorized_key.pub
+@@ -0,0 +1 @@
++ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBbOstgqNJz/otHu+0n2SL5dx/teXm1FYKIEWmSSRkb devops-course-grader-2026
