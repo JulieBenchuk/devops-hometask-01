@@ -13,8 +13,10 @@
 #     явного 127.0.0.1 = порт виден снаружи на публичном IP.
 #   - наружу через системный nginx + TLS выставляется ТОЛЬКО Grafana
 #     (subdomain grafana.<твой-домен>); остальное смотрится через SSH-туннель.
-#   - все сервисы живут в общей docker-сети app-network (она объявлена
-#     в основном docker-compose.yml).
+#   - сети явно не объявляем: сервисы автоматически попадают в общий
+#     project-default-network (обычно `myapp_default`), где уже живут
+#     db/back/front из основного docker-compose.yml. Именно за счёт этого
+#     Prometheus видит `back:3000` и Promtail — Docker socket.
 
 services:
   prometheus:
@@ -29,8 +31,6 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=15d'
     restart: unless-stopped
-    networks:
-      - app-network
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -45,8 +45,6 @@ services:
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     restart: unless-stopped
-    networks:
-      - app-network
 
   grafana:
     image: grafana/grafana:latest
@@ -63,8 +61,6 @@ services:
       - prometheus
       - loki
     restart: unless-stopped
-    networks:
-      - app-network
 
   loki:
     image: grafana/loki:latest
@@ -76,8 +72,6 @@ services:
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     restart: unless-stopped
-    networks:
-      - app-network
 
   promtail:
     image: grafana/promtail:latest
@@ -91,13 +85,8 @@ services:
     depends_on:
       - loki
     restart: unless-stopped
-    networks:
-      - app-network
 
 volumes:
   prometheus_data:
   grafana_data:
   loki_data:
-
-networks:
-  app-network:
