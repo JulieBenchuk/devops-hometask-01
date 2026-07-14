@@ -1,0 +1,100 @@
+# Гейт целостности раздаточных патчей (Вариант A из incidents-log TODO).
+#
+# Живёт НА КАЖДОЙ ветке hw*-handoff. Срабатывает на push в эту ветку и проверяет,
+# что цепочка hw-starter → hw2.patch → … → hwN.patch воспроизводит каждый
+# _internal/hw-N-source байт-в-байт (кроме maintainer-only файлов). Красный → включи
+# этот workflow как required-check в branch protection, и сломанный патч физически
+# не доедет до студентов.
+#
+# Ловит оба класса инцидентов из журнала:
+#   • «hwN.patch не применяется на корректный week{N-1}» (2026-06-30, 2026-07-08)  → git apply --check
+#   • «патч применился, но результат разъехался с источником» (helpers.ts baseURL) → сверка с _internal/hw-N-source
+#
+# ⚠️ Оговорка: сверка гарантирует «патч == _internal/hw-N-source». Если баг живёт
+#    в САМОМ источнике (кто-то закоммитил сломанный код в _internal/*), этот гейт его
+#    НЕ поймает — для этого нужен отдельный прогон e2e против источника (Вариант B).
+
+name: validate-handoff-chain
+
+on:
+  push:
+    branches:
+      - 'hw*-handoff'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout handoff branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Chain hw-starter → hwN reproduces every _internal/hw-N-source
+        run: |
+          set -euo pipefail
+
+          # --- какой это handoff? hw3-handoff → N=3 ---
+          BR="${GITHUB_REF_NAME}"
+          case "$BR" in
+            hw*-handoff) : ;;
+            *) echo "::error::'$BR' — не ветка hw*-handoff, проверять нечего."; exit 1 ;;
+          esac
+          N="${BR#hw}"; N="${N%-handoff}"
+          if ! echo "$N" | grep -qE '^[0-9]+$'; then
+            echo "::error::не смог извлечь номер ДЗ из '$BR'"; exit 1
+          fi
+          if [ "$N" -lt 2 ]; then
+            echo "hw$N: цепочка патчей начинается с hw2 — для hw$N проверять нечего."; exit 0
+          fi
+          echo "Проверяю цепочку до hw$N ($BR)"
+
+          # --- фетчим все ветки, нужные цепочке, в служебное пространство refs/chain/* ---
+          git fetch --quiet origin "hw-starter:refs/chain/hw-starter" \
+            || { echo "::error::нет ветки hw-starter"; exit 1; }
+          for k in $(seq 2 "$N"); do
+            git fetch --quiet origin \
+              "hw${k}-handoff:refs/chain/hw${k}-handoff" \
+              "_internal/hw-${k}-source:refs/chain/hw-${k}-source" \
+              || { echo "::error::нет hw${k}-handoff или _internal/hw-${k}-source"; exit 1; }
+          done
+
+          # --- строим из чистого hw-starter, накатываем патчи по порядку ---
+          git checkout -q -f refs/chain/hw-starter
+          git clean -fdxq
+
+          # maintainer-only файлы: живут в _internal/*, но студентам патчами не раздаются.
+          # Массив (не строка!) — иначе скобки в :(exclude) ломают шелл при развёртывании.
+          EXCLUDES=( -- . ':(exclude)INCIDENTS.md' ':(exclude)MAINTAINERS.md' ':(exclude).github' )
+
+          for k in $(seq 2 "$N"); do
+            git show "refs/chain/hw${k}-handoff:hw${k}.patch" > "/tmp/hw${k}.patch"
+
+            # (1) применяется ли патч на дерево, собранное предыдущими патчами?
+            if ! git apply --check "/tmp/hw${k}.patch" 2>/tmp/apply_err; then
+              echo "::error::hw${k}.patch НЕ применяется на week$((k-1)), собранный из предыдущих патчей."
+              sed 's/^/    /' /tmp/apply_err || true
+              echo "    → hw${k}.patch рассинхронизирован с _internal/hw-$((k-1))-source. Перегенерируй:"
+              echo "      git diff _internal/hw-$((k-1))-source _internal/hw-${k}-source > hw${k}.patch"
+              exit 1
+            fi
+            git apply "/tmp/hw${k}.patch"
+            git add -A
+
+            # (2) совпадает ли результат с эталонным снапшотом (кроме maintainer-only)?
+            if git diff --cached --quiet "refs/chain/hw-${k}-source" "${EXCLUDES[@]}"; then
+              echo "  hw${k}: ✓ дерево == _internal/hw-${k}-source"
+            else
+              echo "::error::После hw${k}.patch дерево НЕ совпадает с _internal/hw-${k}-source (кроме maintainer-файлов)."
+              git diff --cached --stat "refs/chain/hw-${k}-source" "${EXCLUDES[@]}" | sed 's/^/    /' || true
+              echo "    → hw${k}.patch и _internal/hw-${k}-source разъехались. Перегенерируй патч из источника:"
+              echo "      git diff _internal/hw-$((k-1))-source _internal/hw-${k}-source > hw${k}.patch"
+              exit 1
+            fi
+          done
+
+          echo "✅ Цепочка hw-starter → hw2 → … → hw$N воспроизводит каждый _internal/hw-N-source. Патч безопасен для раздачи."
