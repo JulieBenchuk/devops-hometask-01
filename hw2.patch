@@ -1,0 +1,288 @@
+diff --git a/.env.development.compose b/.env.development.compose
+new file mode 100644
+index 0000000..8ca06c9
+--- /dev/null
++++ b/.env.development.compose
+@@ -0,0 +1,2 @@
++DOCKERHUB_USERNAME=
++IMAGE_TAG=1.0.0
+diff --git a/Makefile b/Makefile
+index 8f4342e..ca6d141 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,39 +1,75 @@
+-build-back: ## Build the back docker image
+-	docker build -t todo-back back
++# Makefile для hw2: docker compose + публикация образов на Docker Hub.
++#
++# ВНИМАНИЕ: этот Makefile — часть задания, его менять НЕ нужно.
++# Если кажется, что цель «не работает» — почти наверняка ошибка в
++# docker-compose.yml или в env-файлах, а не здесь.
++#
++# Переменные DOCKERHUB_USERNAME и IMAGE_TAG живут в .env.development.compose:
++#   - в build/push-целях подсасываются через `. ./.env.development.compose && ...`
++#     (тот же приём, что в hw1 для VITE_API_URL — обрати внимание на $$VAR-экранирование)
++#   - в compose-целях передаются флагом `--env-file .env.development.compose`
++#     (compose подставит ${DOCKERHUB_USERNAME} и ${IMAGE_TAG} в docker-compose.yml)
++#
++# Все образы собираются под --platform linux/amd64 — single-arch, чтобы образ
++# с твоего Mac M1 запустился на amd64-машине проверяющего.
+ 
+-build-front: ## Build the front docker image (needs .env.development.front)
+-	. ./.env.development.front && docker build --build-arg "VITE_API_URL=$$VITE_API_URL" -t todo-front front
++# ---------- build (локально, под публикацию) ----------
+ 
+-network: ## Create the user-defined network (idempotent)
+-	docker network inspect todo-net >/dev/null 2>&1 || docker network create todo-net
++build-back: ## Собрать образ todo-back и протегировать как $IMAGE_TAG и latest
++	. ./.env.development.compose && \
++	  docker build --platform linux/amd64 \
++	    -t $$DOCKERHUB_USERNAME/todo-back:$$IMAGE_TAG \
++	    -t $$DOCKERHUB_USERNAME/todo-back:latest \
++	    back
+ 
+-network-rm: ## Remove the user-defined network
+-	docker network rm todo-net
++build-front: ## Собрать образ todo-front (с VITE_API_URL) и протегировать
++	. ./.env.development.compose && . ./.env.development.front && \
++	  docker build --platform linux/amd64 \
++	    --build-arg "VITE_API_URL=$$VITE_API_URL" \
++	    -t $$DOCKERHUB_USERNAME/todo-front:$$IMAGE_TAG \
++	    -t $$DOCKERHUB_USERNAME/todo-front:latest \
++	    front
+ 
+-up-db: ## Start the db container (needs .env.development.db)
+-	docker run -d --name todo-db-container --network todo-net -p 15432:5432 --env-file .env.development.db postgres:16-alpine
++build: build-back build-front ## Собрать оба образа
+ 
+-up-back: ## Start the back container (needs .env.development.back)
+-	docker run -d --name todo-back-container --network todo-net -p 13000:3000 --env-file .env.development.back todo-back
++# ---------- push на Docker Hub ----------
+ 
+-up-front: ## Start the front container
+-	docker run -d --name todo-front-container -p 18080:80 todo-front
++push-back: ## Запушить оба тега todo-back
++	. ./.env.development.compose && \
++	  docker push $$DOCKERHUB_USERNAME/todo-back:$$IMAGE_TAG && \
++	  docker push $$DOCKERHUB_USERNAME/todo-back:latest
+ 
+-down-db: ## Stop and remove the db container
+-	docker rm -f todo-db-container
++push-front: ## Запушить оба тега todo-front
++	. ./.env.development.compose && \
++	  docker push $$DOCKERHUB_USERNAME/todo-front:$$IMAGE_TAG && \
++	  docker push $$DOCKERHUB_USERNAME/todo-front:latest
+ 
+-down-back: ## Stop and remove the back container
+-	docker rm -f todo-back-container
++push: push-back push-front ## Запушить оба образа
+ 
+-down-front: ## Stop and remove the front container
+-	docker rm -f todo-front-container
++# ---------- compose lifecycle ----------
+ 
+-up: build-back build-front network up-db up-back up-front ## Build images, create network and start all three containers
++pull: ## Скачать образы с Docker Hub (НЕ собирать локально)
++	docker compose --env-file .env.development.compose pull
+ 
+-down: down-front down-back down-db network-rm ## Stop and remove all containers and the network
++up: ## Поднять стек в фоне (compose сам соблюдёт depends_on/healthcheck)
++	docker compose --env-file .env.development.compose up -d
+ 
+-e2e-install: ## Install front npm deps and the playwright browser (run once)
++down: ## Погасить стек, named volume pgdata сохраняется
++	docker compose --env-file .env.development.compose down
++
++down-v: ## Погасить стек + удалить named volume pgdata (сбрасывает БД)
++	docker compose --env-file .env.development.compose down -v
++
++logs: ## Стримить логи всех сервисов
++	docker compose --env-file .env.development.compose logs -f
++
++ps: ## Показать статус контейнеров
++	docker compose --env-file .env.development.compose ps
++
++# ---------- e2e (как в hw1) ----------
++
++e2e-install: ## Один раз: ставит npm-зависимости фронта и качает Chromium для Playwright
+ 	cd front && npm install && npx playwright install chromium
+ 
+-e2e: ## Run Playwright e2e tests (headless)
++e2e: ## Прогнать Playwright-тесты против поднятого стека
+ 	set -a && . ./.env.development.e2e && cd front && npm run e2e
+diff --git a/app-config/app.json b/app-config/app.json
+new file mode 100644
+index 0000000..37eb1aa
+--- /dev/null
++++ b/app-config/app.json
+@@ -0,0 +1,3 @@
++{
++  "maxTodos": 5
++}
+diff --git a/back/src/todos/todos.service.ts b/back/src/todos/todos.service.ts
+index 24c5d27..f19303b 100644
+--- a/back/src/todos/todos.service.ts
++++ b/back/src/todos/todos.service.ts
+@@ -1,10 +1,48 @@
+-import { Injectable, NotFoundException } from '@nestjs/common';
++import {
++  BadRequestException,
++  Injectable,
++  InternalServerErrorException,
++  NotFoundException,
++} from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+ import { Repository } from 'typeorm';
++import { readFileSync } from 'node:fs';
+ import { Todo } from './todo.entity';
+ import { CreateTodoDto } from './dto/create-todo.dto';
+ import { UpdateTodoDto } from './dto/update-todo.dto';
+ 
++const APP_CONFIG_PATH = '/app/config/app.json';
++
++interface AppConfig {
++  maxTodos: number;
++}
++
++function readAppConfig(): AppConfig {
++  let raw: string;
++  try {
++    raw = readFileSync(APP_CONFIG_PATH, 'utf8');
++  } catch (e) {
++    throw new InternalServerErrorException(
++      `Cannot read runtime config at ${APP_CONFIG_PATH}: ${(e as Error).message}`,
++    );
++  }
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch (e) {
++    throw new InternalServerErrorException(
++      `Runtime config at ${APP_CONFIG_PATH} is not valid JSON: ${(e as Error).message}`,
++    );
++  }
++  const max = (parsed as { maxTodos?: unknown })?.maxTodos;
++  if (typeof max !== 'number' || !Number.isFinite(max) || max < 0) {
++    throw new InternalServerErrorException(
++      `Runtime config at ${APP_CONFIG_PATH} must contain numeric "maxTodos" >= 0`,
++    );
++  }
++  return { maxTodos: max };
++}
++
+ @Injectable()
+ export class TodosService {
+   constructor(
+@@ -21,7 +59,14 @@ export class TodosService {
+     return todo;
+   }
+ 
+-  create(dto: CreateTodoDto): Promise<Todo> {
++  async create(dto: CreateTodoDto): Promise<Todo> {
++    const { maxTodos } = readAppConfig();
++    const count = await this.repo.count();
++    if (count >= maxTodos) {
++      throw new BadRequestException(
++        `Todo limit reached (${count}/${maxTodos}). Increase "maxTodos" in app config.`,
++      );
++    }
+     const todo = this.repo.create({
+       title: dto.title,
+       description: dto.description ?? null,
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000..3d2ce7c
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,54 @@
++# Docker Compose файл для hw2.
++#
++# Имя образа для back/front собирается из переменных DOCKERHUB_USERNAME и IMAGE_TAG —
++# их compose берёт из .env.development.compose, который мы передаём флагом --env-file
++# (см. Makefile).
++#
++# В этом файле НИГДЕ не должно быть сборки из исходников: образы должны браться
++# готовыми с Docker Hub. Если потребуется собрать — это делает Makefile, не compose.
++
++services:
++  db:
++    # TODO — база данных:
++    #   - указать готовый образ postgres 16-alpine
++    #   - подать переменные окружения из соответствующего env-файла
++    #   - пробросить порт наружу на 15432 (внешний выбран так, чтобы не конфликтовать
++    #     с локально установленным Postgres)
++    #   - персистить данные через NAMED VOLUME (не bind-mount); имя тома — pgdata
++    #   - добавить проверку готовности: запрос к самой БД через pg_isready,
++    #     с использованием POSTGRES_USER и POSTGRES_DB
++    #     ⚠️ переменные окружения внутри проверки экранируются двойным $$,
++    #     иначе compose попытается подставить их сам на этапе парсинга файла
++    #     (а нам надо, чтобы их разворачивал shell внутри контейнера в рантайме)
++    #   - подобрать осмысленные параметры проверки: как часто опрашивать, сколько
++    #     попыток до признания unhealthy, сколько ждать перед самой первой проверкой
++
++  back:
++    # TODO — backend (NestJS):
++    #   - указать образ, который ты публикуешь в свой Docker Hub репозиторий
++    #     (используй переменные DOCKERHUB_USERNAME и IMAGE_TAG)
++    #   - указать платформу образа linux/amd64 (см. раздел «Платформа» в задании —
++    #     на Apple Silicon без этого compose pull запросит arm64-манифест и упадёт,
++    #     потому что мы публикуем single-arch amd64-образы)
++    #   - подать переменные окружения из соответствующего env-файла
++    #     (не забудь: в нём DB_HOST теперь смотрит на service-name из compose-сети)
++    #   - пробросить порт API на 13000
++    #   - выразить зависимость от базы: back не должен стартовать, пока БД не
++    #     ответит на healthcheck успешно (используй подходящую condition)
++    #   - примонтировать локальную папку с runtime-конфигом внутрь контейнера
++    #     по пути /app/config; делаем это READ-ONLY, чтобы контейнер физически
++    #     не мог изменить файл на хосте
++
++  front:
++    # TODO — frontend (nginx со статикой):
++    #   - указать образ из своего Docker Hub репозитория
++    #   - указать платформу образа linux/amd64 (по той же причине, что у back)
++    #   - пробросить 80-й порт nginx наружу на 18080
++    #   - выразить зависимость от back, но НЕ через service_healthy:
++    #     у back в этом задании нет healthcheck, поэтому здесь нужна другая condition
++    #     (которая ждёт только запуска контейнера, не его health-статуса)
++
++volumes:
++  # TODO — секция named volumes:
++  #   - объявить том, имя которого ты указал в сервисе db (без дополнительных опций,
++  #     пустого тела достаточно)
+diff --git a/front/e2e/limit.spec.ts b/front/e2e/limit.spec.ts
+new file mode 100644
+index 0000000..c5fa7b5
+--- /dev/null
++++ b/front/e2e/limit.spec.ts
+@@ -0,0 +1,31 @@
++import { expect, test, request } from '@playwright/test';
++import { resetTodos } from './helpers';
++
++const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
++  /\/$/,
++  '',
++);
++
++test.beforeEach(async () => {
++  await resetTodos();
++});
++
++test('rejects creation when maxTodos limit is reached', async () => {
++  // Default committed config is { "maxTodos": 5 }.
++  // Если этот тест падает с 500 на первом же POST — скорее всего bind-mount
++  // ./app-config:/app/config:ro не настроен и back не может прочитать конфиг.
++  const ctx = await request.newContext();
++
++  for (let i = 1; i <= 5; i++) {
++    const res = await ctx.post(`${API}/todos`, { data: { title: `todo ${i}` } });
++    expect(res.status(), `creating todo #${i} should succeed`).toBe(201);
++  }
++
++  const overflow = await ctx.post(`${API}/todos`, { data: { title: 'overflow' } });
++  expect(overflow.status()).toBe(400);
++
++  const body = (await overflow.json()) as { message?: string };
++  expect(body.message ?? '').toMatch(/limit/i);
++
++  await ctx.dispose();
++});
