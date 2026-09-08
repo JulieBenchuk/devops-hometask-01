@@ -11,6 +11,7 @@ services:
   db:
     #   - указать готовый образ postgres 16-alpine
     image: postgres:16-alpine
+    restart: unless-stopped
     #   - подать переменные окружения из соответствующего env-файла
     env_file: .env.development.db
       #   - пробросить порт наружу на 15432 (внешний выбран так, чтобы не конфликтовать
@@ -39,6 +40,7 @@ services:
     #   - указать образ, который ты публикуешь в свой Docker Hub репозиторий
     #     (используй переменные DOCKERHUB_USERNAME и IMAGE_TAG)
     image: ${DOCKERHUB_USERNAME}/todo-back:${IMAGE_TAG}
+    restart: unless-stopped
     #   - указать платформу образа linux/amd64 (см. раздел «Платформа» в задании —
     #     на Apple Silicon без этого compose pull запросит arm64-манифест и упадёт,
     #     потому что мы публикуем single-arch amd64-образы)
@@ -63,6 +65,7 @@ services:
   front:
     #   - указать образ из своего Docker Hub репозитория
     image: ${DOCKERHUB_USERNAME}/todo-front:${IMAGE_TAG}
+    restart: unless-stopped
     #   - указать платформу образа linux/amd64 (по той же причине, что у back)
     platform: linux/amd64
     #   - пробросить 80-й порт nginx наружу на 18080
