@@ -69,7 +69,7 @@ export function TodosListPage() {
           data-testid="create-submit"
         >
           {createTodo.isPending && <Loader2 className="animate-spin" />}
-          Add
+          Add +
         </Button>
       </form>
 
