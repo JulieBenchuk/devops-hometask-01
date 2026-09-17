@@ -39,8 +39,10 @@ services:
   back:
     #   - указать образ, который ты публикуешь в свой Docker Hub репозиторий
     #     (используй переменные DOCKERHUB_USERNAME и IMAGE_TAG)
-    image: ${DOCKERHUB_USERNAME}/todo-back:${IMAGE_TAG}
+    image: ${DOCKERHUB_USERNAME}/todo-back:${APP_VERSION}
     restart: unless-stopped
+    environment:
+      APP_VERSION: ${APP_VERSION}  # ← пробрасываем в контейнер, чтобы /api/health показал
     #   - указать платформу образа linux/amd64 (см. раздел «Платформа» в задании —
     #     на Apple Silicon без этого compose pull запросит arm64-манифест и упадёт,
     #     потому что мы публикуем single-arch amd64-образы)
@@ -64,7 +66,7 @@ services:
 
   front:
     #   - указать образ из своего Docker Hub репозитория
-    image: ${DOCKERHUB_USERNAME}/todo-front:${IMAGE_TAG}
+    image: ${DOCKERHUB_USERNAME}/todo-front:${APP_VERSION}
     restart: unless-stopped
     #   - указать платформу образа linux/amd64 (по той же причине, что у back)
     platform: linux/amd64
