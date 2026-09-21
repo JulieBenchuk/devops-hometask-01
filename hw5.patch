@@ -1,0 +1,622 @@
+diff --git a/Makefile b/Makefile
+index dfb1176..7dda043 100644
+--- a/Makefile
++++ b/Makefile
+@@ -81,3 +81,23 @@ e2e-deployed: ## Прогнать Playwright-тесты против разве
+ 
+ smoke-deployed: ## Read-only smoke-проверка задеплоенного стека (нужен .env.production.e2e)
+ 	set -a && . ./.env.production.e2e && bash scripts/smoke.sh
++
++# ---------- observability (hw5: Prometheus + Grafana + Loki + Promtail) ----------
++#
++# Observability-стек живёт в отдельном файле docker-compose.observability.yml
++# и поднимается вместе с прод-сервисами через два `-f`. Прод-сервисы
++# (db/back/front) при этом не пересоздаются — compose видит, что они уже Up.
++#
++# Запускать на VPS один раз — стек самодостаточный, CI/CD из hw4 продолжает
++# деплоить только back/front через `--no-deps` и observability не трогает.
++
++COMPOSE_FILES_OBS := -f docker-compose.yml -f docker-compose.observability.yml
++
++up-observability: ## Поднять весь стек (прод + observability)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose up -d
++
++down-observability: ## Погасить весь стек (volumes сохраняются)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose down
++
++down-observability-v: ## Погасить весь стек И удалить observability-volumes (сбрасывает пароль Grafana, историю метрик/логов)
++	docker compose $(COMPOSE_FILES_OBS) --env-file .env.development.compose down -v
+diff --git a/back/package-lock.json b/back/package-lock.json
+index 14bf5bc..b149988 100644
+--- a/back/package-lock.json
++++ b/back/package-lock.json
+@@ -17,6 +17,7 @@
+         "class-transformer": "^0.5.1",
+         "class-validator": "^0.14.1",
+         "pg": "^8.12.0",
++        "prom-client": "^15.1.3",
+         "reflect-metadata": "^0.2.2",
+         "rxjs": "^7.8.1",
+         "typeorm": "^0.3.20"
+@@ -776,6 +777,15 @@
+         "npm": ">=5.0.0"
+       }
+     },
++    "node_modules/@opentelemetry/api": {
++      "version": "1.9.1",
++      "resolved": "https://registry.npmjs.org/@opentelemetry/api/-/api-1.9.1.tgz",
++      "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==",
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=8.0.0"
++      }
++    },
+     "node_modules/@pkgjs/parseargs": {
+       "version": "0.11.0",
+       "resolved": "https://registry.npmjs.org/@pkgjs/parseargs/-/parseargs-0.11.0.tgz",
+@@ -1497,6 +1507,12 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/bintrees": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/bintrees/-/bintrees-1.0.2.tgz",
++      "integrity": "sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==",
++      "license": "MIT"
++    },
+     "node_modules/bl": {
+       "version": "4.1.0",
+       "resolved": "https://registry.npmjs.org/bl/-/bl-4.1.0.tgz",
+@@ -3924,6 +3940,19 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/prom-client": {
++      "version": "15.1.3",
++      "resolved": "https://registry.npmjs.org/prom-client/-/prom-client-15.1.3.tgz",
++      "integrity": "sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@opentelemetry/api": "^1.4.0",
++        "tdigest": "^0.1.1"
++      },
++      "engines": {
++        "node": "^16 || ^18 || >=20"
++      }
++    },
+     "node_modules/proxy-addr": {
+       "version": "2.0.7",
+       "resolved": "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.7.tgz",
+@@ -4600,6 +4629,15 @@
+         "url": "https://opencollective.com/webpack"
+       }
+     },
++    "node_modules/tdigest": {
++      "version": "0.1.2",
++      "resolved": "https://registry.npmjs.org/tdigest/-/tdigest-0.1.2.tgz",
++      "integrity": "sha512-+G0LLgjjo9BZX2MfdvPfH+MKLCrxlXSYec5DaPYP1fe6Iyhf0/fSmJ0bFiZ1F8BT6cGXl2LpltQptzjXKWEkKA==",
++      "license": "MIT",
++      "dependencies": {
++        "bintrees": "1.0.2"
++      }
++    },
+     "node_modules/terser": {
+       "version": "5.47.1",
+       "resolved": "https://registry.npmjs.org/terser/-/terser-5.47.1.tgz",
+diff --git a/back/package.json b/back/package.json
+index b832118..1afa238 100644
+--- a/back/package.json
++++ b/back/package.json
+@@ -19,6 +19,7 @@
+     "class-transformer": "^0.5.1",
+     "class-validator": "^0.14.1",
+     "pg": "^8.12.0",
++    "prom-client": "^15.1.3",
+     "reflect-metadata": "^0.2.2",
+     "rxjs": "^7.8.1",
+     "typeorm": "^0.3.20"
+diff --git a/back/src/app.module.ts b/back/src/app.module.ts
+index 2a02b3c..38e9331 100644
+--- a/back/src/app.module.ts
++++ b/back/src/app.module.ts
+@@ -1,10 +1,12 @@
+-import { Module } from '@nestjs/common';
++import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+ import { ConfigModule, ConfigService } from '@nestjs/config';
+ import { TypeOrmModule } from '@nestjs/typeorm';
+ import { TodosModule } from './todos/todos.module';
+ import { Todo } from './todos/todo.entity';
+ import { TestResetModule } from './test-reset/test-reset.module';
+ import { HealthModule } from './health/health.module';
++import { MetricsModule } from './metrics/metrics.module';
++import { MetricsMiddleware } from './metrics/metrics.middleware';
+ 
+ @Module({
+   imports: [
+@@ -25,6 +27,16 @@ import { HealthModule } from './health/health.module';
+     TodosModule,
+     TestResetModule,
+     HealthModule,
++    MetricsModule,
+   ],
+ })
+-export class AppModule {}
++export class AppModule implements NestModule {
++  configure(consumer: MiddlewareConsumer): void {
++    // Меряем все маршруты, кроме /metrics (self-probe) и /health
++    // (служебный эндпоинт smoke-проверки и AI-агента — не пользовательский трафик).
++    consumer
++      .apply(MetricsMiddleware)
++      .exclude('metrics', 'health')
++      .forRoutes('*');
++  }
++}
+diff --git a/back/src/metrics/metrics.controller.ts b/back/src/metrics/metrics.controller.ts
+new file mode 100644
+index 0000000..49d8728
+--- /dev/null
++++ b/back/src/metrics/metrics.controller.ts
+@@ -0,0 +1,20 @@
++import { Controller, Get, Res } from '@nestjs/common';
++import { Response } from 'express';
++import { register } from 'prom-client';
++import { ApiExcludeController } from '@nestjs/swagger';
++
++// Эндпоинт /metrics для hw5: Prometheus сам приходит сюда раз в 15 секунд
++// и забирает текстовый snapshot всех зарегистрированных метрик.
++// Контракт: ответ должен иметь Content-Type 'text/plain; version=0.0.4'
++// и тело в формате Prometheus exposition (строки `# HELP`, `# TYPE`,
++// затем сами метрики). prom-client это всё формирует сам.
++
++@ApiExcludeController()
++@Controller('metrics')
++export class MetricsController {
++  @Get()
++  async getMetrics(@Res() res: Response): Promise<void> {
++    res.set('Content-Type', register.contentType);
++    res.end(await register.metrics());
++  }
++}
+diff --git a/back/src/metrics/metrics.middleware.ts b/back/src/metrics/metrics.middleware.ts
+new file mode 100644
+index 0000000..26ba4e7
+--- /dev/null
++++ b/back/src/metrics/metrics.middleware.ts
+@@ -0,0 +1,49 @@
++import { Injectable, NestMiddleware } from '@nestjs/common';
++import { Request, Response, NextFunction } from 'express';
++import { Counter, Histogram } from 'prom-client';
++
++// Кастомные метрики hw5: фиксируем время ответа и количество HTTP-запросов
++// в разрезе method/route/status_code. Эти два объекта живут в дефолтном
++// реестре prom-client; их же отдаёт /metrics через register.metrics().
++//
++// Buckets подобраны под «обычное web-API»: основная масса запросов
++// до 0.5s, чем выше — тем интереснее с точки зрения медленных хвостов.
++
++export const httpRequestDuration = new Histogram({
++  name: 'http_response_time_seconds',
++  help: 'Duration of HTTP requests in seconds',
++  labelNames: ['method', 'route', 'status_code'],
++  buckets: [0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5],
++});
++
++export const httpRequestsTotal = new Counter({
++  name: 'http_requests_total',
++  help: 'Total number of HTTP requests',
++  labelNames: ['method', 'route', 'status_code'],
++});
++
++interface ExpressRoute {
++  path: string;
++}
++
++@Injectable()
++export class MetricsMiddleware implements NestMiddleware {
++  use(req: Request, res: Response, next: NextFunction): void {
++    const end = httpRequestDuration.startTimer();
++
++    res.on('finish', () => {
++      // req.route появляется ПОСЛЕ матчинга роута Express'ом — если запрос ушёл
++      // в 404 (роут не найден), req.route будет undefined; падаем обратно на req.path.
++      const route = (req.route as ExpressRoute | undefined)?.path ?? req.path;
++      const labels = {
++        method: req.method,
++        route,
++        status_code: res.statusCode,
++      };
++      end(labels);
++      httpRequestsTotal.inc(labels);
++    });
++
++    next();
++  }
++}
+diff --git a/back/src/metrics/metrics.module.ts b/back/src/metrics/metrics.module.ts
+new file mode 100644
+index 0000000..b1296ee
+--- /dev/null
++++ b/back/src/metrics/metrics.module.ts
+@@ -0,0 +1,17 @@
++import { Module } from '@nestjs/common';
++import { collectDefaultMetrics } from 'prom-client';
++import { MetricsController } from './metrics.controller';
++
++// collectDefaultMetrics() в конструкторе модуля включает сборку стандартных
++// метрик Node.js-процесса: heap, event loop lag, GC, активные handles.
++// Эти метрики появляются автоматически в дефолтном реестре, никакой явной
++// регистрации не требуется.
++
++@Module({
++  controllers: [MetricsController],
++})
++export class MetricsModule {
++  constructor() {
++    collectDefaultMetrics();
++  }
++}
+diff --git a/docker-compose.observability.yml b/docker-compose.observability.yml
+new file mode 100644
+index 0000000..2852974
+--- /dev/null
++++ b/docker-compose.observability.yml
+@@ -0,0 +1,92 @@
++# Observability-стек для hw5.
++#
++# Этот файл — override-compose, накладывается поверх основного docker-compose.yml:
++#
++#   docker compose -f docker-compose.yml -f docker-compose.observability.yml \
++#                  --env-file .env.development.compose up -d
++#
++# Удобнее через Makefile-цели: `make up-observability` / `make down-observability`.
++#
++# Контракт:
++#   - все 5 сервисов слушают ТОЛЬКО на 127.0.0.1 (snaplisten).
++#     Docker пишет правила в iptables в обход UFW, поэтому биндинг без
++#     явного 127.0.0.1 = порт виден снаружи на публичном IP.
++#   - наружу через системный nginx + TLS выставляется ТОЛЬКО Grafana
++#     (subdomain grafana.<твой-домен>); остальное смотрится через SSH-туннель.
++#   - сети явно не объявляем: сервисы автоматически попадают в общий
++#     project-default-network (обычно `myapp_default`), где уже живут
++#     db/back/front из основного docker-compose.yml. Именно за счёт этого
++#     Prometheus видит `back:3000` и Promtail — Docker socket.
++
++services:
++  prometheus:
++    image: prom/prometheus:latest
++    container_name: prometheus
++    ports:
++      - "127.0.0.1:9090:9090"
++    volumes:
++      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
++      - prometheus_data:/prometheus
++    command:
++      - '--config.file=/etc/prometheus/prometheus.yml'
++      - '--storage.tsdb.retention.time=15d'
++    restart: unless-stopped
++
++  node-exporter:
++    image: prom/node-exporter:latest
++    container_name: node-exporter
++    pid: host
++    volumes:
++      - /proc:/host/proc:ro
++      - /sys:/host/sys:ro
++      - /:/rootfs:ro
++    command:
++      - '--path.procfs=/host/proc'
++      - '--path.sysfs=/host/sys'
++      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
++    restart: unless-stopped
++
++  grafana:
++    image: grafana/grafana:latest
++    container_name: grafana
++    ports:
++      - "127.0.0.1:3000:3000"
++    volumes:
++      - grafana_data:/var/lib/grafana
++      - ./monitoring/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
++    environment:
++      - GF_SECURITY_ADMIN_USER=admin
++      - GF_SECURITY_ADMIN_PASSWORD=admin
++    depends_on:
++      - prometheus
++      - loki
++    restart: unless-stopped
++
++  loki:
++    image: grafana/loki:latest
++    container_name: loki
++    ports:
++      - "127.0.0.1:3100:3100"
++    volumes:
++      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml:ro
++      - loki_data:/loki
++    command: -config.file=/etc/loki/local-config.yaml
++    restart: unless-stopped
++
++  promtail:
++    image: grafana/promtail:latest
++    container_name: promtail
++    volumes:
++      - /var/lib/docker/containers:/var/lib/docker/containers:ro
++      - /var/run/docker.sock:/var/run/docker.sock
++      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yml:ro
++    command: -config.file=/etc/promtail/config.yml
++    privileged: true
++    depends_on:
++      - loki
++    restart: unless-stopped
++
++volumes:
++  prometheus_data:
++  grafana_data:
++  loki_data:
+diff --git a/front/e2e/metrics.spec.ts b/front/e2e/metrics.spec.ts
+new file mode 100644
+index 0000000..67657eb
+--- /dev/null
++++ b/front/e2e/metrics.spec.ts
+@@ -0,0 +1,76 @@
++import { expect, request as pwRequest, test } from '@playwright/test';
++
++// Тесты hw5 — проверяют, что backend отдаёт метрики в формате Prometheus
++// и что кастомная middleware действительно записывает время ответа.
++// Гоняется и локально (`make e2e`), и против VPS (`make e2e-deployed`).
++
++const API = (process.env.E2E_API_URL ?? 'http://localhost:3000').replace(
++  /\/$/,
++  '',
++);
++
++test('exposes /metrics in Prometheus text format', async () => {
++  const ctx = await pwRequest.newContext();
++  const res = await ctx.get(`${API}/metrics`);
++  expect(res.status()).toBe(200);
++  expect(res.headers()['content-type'] ?? '').toMatch(/text\/plain/);
++
++  const body = await res.text();
++  expect(body).toContain('# HELP');
++  expect(body).toContain('# TYPE');
++
++  await ctx.dispose();
++});
++
++test('exposes default Node.js process metrics', async () => {
++  const ctx = await pwRequest.newContext();
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  expect(body).toMatch(/nodejs_heap_size_used_bytes\s/);
++  expect(body).toMatch(/process_cpu_user_seconds_total\s/);
++
++  await ctx.dispose();
++});
++
++test('records http_response_time_seconds for API traffic', async () => {
++  const ctx = await pwRequest.newContext();
++
++  // Дёргаем настоящий роут чтобы middleware записал замер.
++  await ctx.get(`${API}/todos`);
++  await ctx.get(`${API}/todos`);
++
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  // Ищем счётчик histogram'а: имя_count{лейблы} число.
++  // Хотя бы один матч с method="GET" должен быть после двух GET-запросов.
++  expect(body).toMatch(
++    /http_response_time_seconds_count\{[^}]*method="GET"[^}]*\}\s+\d+/,
++  );
++
++  await ctx.dispose();
++});
++
++test('excludes /metrics and /health from histogram (self-probe protection)', async () => {
++  const ctx = await pwRequest.newContext();
++
++  // Стучимся в /metrics и /health дважды — ни один из них не должен
++  // появиться в самом histogram'е, иначе middleware «измеряет себя».
++  await ctx.get(`${API}/metrics`);
++  await ctx.get(`${API}/health`);
++  await ctx.get(`${API}/metrics`);
++  await ctx.get(`${API}/health`);
++
++  const res = await ctx.get(`${API}/metrics`);
++  const body = await res.text();
++
++  expect(body).not.toMatch(
++    /http_response_time_seconds_count\{[^}]*route="\/metrics"/,
++  );
++  expect(body).not.toMatch(
++    /http_response_time_seconds_count\{[^}]*route="\/health"/,
++  );
++
++  await ctx.dispose();
++});
+diff --git a/monitoring/grafana/provisioning/datasources.yml b/monitoring/grafana/provisioning/datasources.yml
+new file mode 100644
+index 0000000..ddba528
+--- /dev/null
++++ b/monitoring/grafana/provisioning/datasources.yml
+@@ -0,0 +1,23 @@
++# Provisioning datasources для Grafana — hw5.
++#
++# При старте Grafana читает этот файл и автоматически подключает Prometheus
++# и Loki. Не нужно ходить в UI и добавлять руками.
++#
++# URL'ы используют service-имена docker-сети (`prometheus`, `loki`), а не
++# localhost — Grafana обращается к ним изнутри docker-сети.
++
++apiVersion: 1
++
++datasources:
++  - name: Prometheus
++    type: prometheus
++    access: proxy
++    url: http://prometheus:9090
++    isDefault: true
++    editable: true
++
++  - name: Loki
++    type: loki
++    access: proxy
++    url: http://loki:3100
++    editable: true
+diff --git a/monitoring/loki-config.yaml b/monitoring/loki-config.yaml
+new file mode 100644
+index 0000000..6e6a085
+--- /dev/null
++++ b/monitoring/loki-config.yaml
+@@ -0,0 +1,32 @@
++# Конфигурация Loki для hw5 — single-node, без авторизации.
++#
++# Этого достаточно для учебного приложения и одного VPS. Под прод-нагрузку
++# Loki разворачивается distributed (отдельный distributor, ingester, querier),
++# но это сильно за пределами курса.
++
++auth_enabled: false
++
++server:
++  http_listen_port: 3100
++
++common:
++  ring:
++    instance_addr: 127.0.0.1
++    kvstore:
++      store: inmemory
++  replication_factor: 1
++  path_prefix: /tmp/loki
++
++schema_config:
++  configs:
++    - from: 2020-05-15
++      store: tsdb
++      object_store: filesystem
++      schema: v13
++      index:
++        prefix: index_
++        period: 24h
++
++storage_config:
++  filesystem:
++    directory: /tmp/loki/chunks
+diff --git a/monitoring/prometheus.yml b/monitoring/prometheus.yml
+new file mode 100644
+index 0000000..2ffe273
+--- /dev/null
++++ b/monitoring/prometheus.yml
+@@ -0,0 +1,29 @@
++# Конфигурация сбора метрик для hw5.
++#
++# Prometheus работает по pull-модели: периодически опрашивает targets и
++# скачивает метрики по HTTP. Каждый таргет должен отдавать на /metrics
++# текст в формате Prometheus exposition.
++#
++# Targets указаны через service-имена docker-compose сети (`back`, `node-exporter`),
++# а не через localhost — внутри docker-сети сервисы видят друг друга по именам.
++
++global:
++  scrape_interval: 15s
++  evaluation_interval: 15s
++
++scrape_configs:
++  # Сам Prometheus тоже отдаёт метрики на /metrics.
++  - job_name: 'prometheus'
++    static_configs:
++      - targets: ['localhost:9090']
++
++  # Системные метрики хоста: CPU, RAM, диск, сеть.
++  - job_name: 'node-exporter'
++    static_configs:
++      - targets: ['node-exporter:9100']
++
++  # Метрики NestJS-приложения: default Node.js + кастомный HTTP-гистограмма.
++  # Порт 3000 — внутренний порт контейнера back в docker-сети.
++  - job_name: 'back'
++    static_configs:
++      - targets: ['back:3000']
+diff --git a/monitoring/promtail-config.yaml b/monitoring/promtail-config.yaml
+new file mode 100644
+index 0000000..76b2ce6
+--- /dev/null
++++ b/monitoring/promtail-config.yaml
+@@ -0,0 +1,44 @@
++# Конфигурация Promtail для hw5 — собирает логи из всех контейнеров docker.
++#
++# docker_sd_configs делает service discovery через Docker API: Promtail сам
++# находит все запущенные контейнеры, не нужно перечислять каждый.
++# relabel_configs прокидывает Docker-метаданные в лейблы Loki:
++#   - container — имя контейнера (с обрезанным ведущим слэшем)
++#   - service   — имя сервиса docker-compose (по нему фильтруем в Grafana)
++#   - image     — образ
++# По этим лейблам потом ищем логи через LogQL.
++
++server:
++  http_listen_port: 9080
++  grpc_listen_port: 0
++
++positions:
++  filename: /tmp/positions.yaml
++
++clients:
++  - url: http://loki:3100/loki/api/v1/push
++
++scrape_configs:
++  - job_name: docker
++    pipeline_stages:
++      - docker: {}
++
++    docker_sd_configs:
++      - host: unix:///var/run/docker.sock
++
++    relabel_configs:
++      - source_labels: ['__meta_docker_container_name']
++        target_label: 'container'
++        regex: '/(.*)'
++
++      - source_labels: ['__meta_docker_container_id']
++        target_label: 'container_id'
++
++      - source_labels: ['__meta_docker_container_image']
++        target_label: 'image'
++
++      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
++        target_label: 'service'
++
++      - source_labels: ['__meta_docker_container_log_stream']
++        target_label: 'stream'
+diff --git a/scripts/smoke.sh b/scripts/smoke.sh
+index d6d9f70..d48552c 100755
+--- a/scripts/smoke.sh
++++ b/scripts/smoke.sh
+@@ -1,9 +1,10 @@
+ #!/usr/bin/env bash
+-# Smoke-проверка задеплоенного стека для hw4 — лёгкий read-only health check.
++# Smoke-проверка задеплоенного стека для hw4+hw5 — лёгкий read-only health check.
+ #
+ # Используется в job'е `verify` пайплайна и доступна локально через `make smoke-deployed`.
+ # В отличие от `make e2e-deployed` (Playwright + reset todos) — НЕ мутирует данные:
+-# только проверяет, что /api/health отвечает 200 со status=ok и что фронт отдаёт HTML.
++# только проверяет, что /api/health отвечает 200 со status=ok, что фронт отдаёт HTML
++# и (с hw5) что /api/metrics отдаёт текст в формате Prometheus exposition.
+ #
+ # Требует переменную окружения E2E_BASE_URL (вида https://your-domain.example).
+ # Обычно подгружается из .env.production.e2e через `make smoke-deployed`.
+@@ -30,4 +31,15 @@ echo "${INDEX}" | grep -qi '<title' || {
+   exit 1
+ }
+ 
++echo "→ GET ${BASE}/api/metrics"
++METRICS=$(curl -sSf --max-time 10 -H 'Accept: text/plain' "${BASE}/api/metrics")
++echo "${METRICS}" | grep -q '^# HELP' || {
++  echo "✗ /api/metrics did not return Prometheus exposition format (no '# HELP' lines)"
++  exit 1
++}
++echo "${METRICS}" | grep -q 'nodejs_heap_size_used_bytes' || {
++  echo "✗ /api/metrics missing default Node.js metrics (nodejs_heap_size_used_bytes)"
++  exit 1
++}
++
+ echo "✓ smoke checks passed"
