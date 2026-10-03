@@ -3,6 +3,7 @@ name: PR Check
 on:
   pull_request:
     branches: [week*]
+  workflow_call:
 
 jobs:
   checks:
